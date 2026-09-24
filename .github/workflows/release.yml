@@ -14,15 +14,22 @@ name: release
 # Este repositorio NAO tem segredo. A autenticacao com o npm e por OIDC
 # (trusted publishing): o runner troca o seu proprio id-token pelo direito de
 # publicar, e nao existe credencial de longa duracao para vazar ou expirar.
+# Por isso tambem nao ha `NODE_AUTH_TOKEN` no passo de publish, e `permissions`
+# precisa manter `id-token: write`.
 #
-# Isso exige que @retick/client tenha este repositorio e este arquivo
-# registrados como trusted publisher no npm:
+# PRE-REQUISITO, uma vez so: @retick/client precisa ter ESTE repositorio e
+# ESTE arquivo registrados como trusted publisher. O registro e feito assim,
+# num terminal interativo (abre o navegador para o 2FA):
 #
-#   npm trust github @retick/client --file release.yml \
+#   npx -y npm@latest trust github @retick/client --file release.yml \
 #     --repo neilor/retick-client --allow-publish
 #
-# Esse comando exige 2FA ligada na conta npm. Enquanto nao estiver, o publish
-# daqui falha com 404 ou 403 e a causa e essa, nao o codigo.
+# Conferir com `npx -y npm@latest trust list @retick/client`. O npm 11 nao tem
+# o comando `trust`; por isso o `npm@latest`.
+#
+# Se o publish daqui falhar com 404 no PUT, a causa quase sempre e essa: o
+# trusted publisher nao esta registrado, ou foi registrado para outro arquivo
+# de workflow. O nome do arquivo entra na identidade e precisa bater.
 
 on:
   push:
