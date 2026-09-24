@@ -11,8 +11,18 @@ name: release
 # Para publicar:
 #   npm version <patch|minor|major> && git push --follow-tags
 #
-# Segredo necessario: NPM_TOKEN, um token de automacao com permissao de
-# publicar no escopo. E o unico segredo deste repositorio.
+# Este repositorio NAO tem segredo. A autenticacao com o npm e por OIDC
+# (trusted publishing): o runner troca o seu proprio id-token pelo direito de
+# publicar, e nao existe credencial de longa duracao para vazar ou expirar.
+#
+# Isso exige que @retick/client tenha este repositorio e este arquivo
+# registrados como trusted publisher no npm:
+#
+#   npm trust github @retick/client --file release.yml \
+#     --repo neilor/retick-client --allow-publish
+#
+# Esse comando exige 2FA ligada na conta npm. Enquanto nao estiver, o publish
+# daqui falha com 404 ou 403 e a causa e essa, nao o codigo.
 
 on:
   push:
@@ -32,6 +42,10 @@ jobs:
         with:
           node-version: '24.x'
           registry-url: 'https://registry.npmjs.org'
+
+      # O OIDC do npm pede um cliente recente. O npm que vem com o Node nem
+      # sempre e, e a falha nesse caso e um 404 sem explicacao.
+      - run: npm install -g npm@latest
 
       - run: npm install --no-audit --no-fund
 
@@ -61,10 +75,11 @@ jobs:
           name: sbom
           path: sbom.cdx.json
 
+      # Sem NODE_AUTH_TOKEN de proposito: quem autentica e o OIDC, pelo
+      # id-token deste job. A proveniencia sai do mesmo mecanismo.
       - name: publicar com proveniencia
         run: npm publish --provenance --access public
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           RETICK_PUBLICAR_SDK: sim
 
       - name: anexar o SBOM a release

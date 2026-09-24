@@ -14,8 +14,9 @@ Apache-2.0.
 npm install @retick/client
 ```
 
-`0.2.0` is the first release aimed at the registry and is not on npm yet.
-`CHANGELOG.md` is the record of what lands when it does.
+`0.2.0` is the first release on npm, published from GitHub Actions on the `v0.2.0` tag.
+Every tarball carries a signed provenance attestation, so `npm audit signatures` verifies which
+repository, commit and workflow built it. `CHANGELOG.md` is the record of what changed.
 
 Node 18.17 or newer, for `fetch`. CI installs the packed tarball and runs it on 18, 20, 22 and
 24 on every push, so that floor is a measurement rather than a guess.
