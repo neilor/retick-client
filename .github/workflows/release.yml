@@ -1,0 +1,74 @@
+name: release
+
+# Publica no npm a partir de uma tag `v*`, com proveniencia.
+#
+# A proveniencia e o motivo de a publicacao morar aqui e nao numa maquina: o
+# npm so assina a origem quando o publish sai de um runner com OIDC, e e essa
+# assinatura que deixa qualquer pessoa conferir que o tarball veio deste
+# repositorio e deste commit. Publicar do laptop funciona, mas entrega um
+# pacote sem essa prova.
+#
+# Para publicar:
+#   npm version <patch|minor|major> && git push --follow-tags
+#
+# Segredo necessario: NPM_TOKEN, um token de automacao com permissao de
+# publicar no escopo. E o unico segredo deste repositorio.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  publicar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.x'
+          registry-url: 'https://registry.npmjs.org'
+
+      - run: npm install --no-audit --no-fund
+
+      # O que vai ao ar passa pelos mesmos portoes do dia a dia, e nao por
+      # uma versao apressada deles.
+      - run: npm run typecheck
+      - run: npm test
+      - run: ./scripts/provar-instalacao-avulsa.sh
+      - run: ./scripts/varrer-o-pacote.sh
+
+      - name: a tag e a versao do package.json precisam bater
+        run: |
+          set -euo pipefail
+          versao="$(node -p "require('./package.json').version")"
+          tag="${GITHUB_REF_NAME#v}"
+          if [ "$GITHUB_REF_TYPE" = "tag" ] && [ "$versao" != "$tag" ]; then
+            echo "a tag diz $tag e o package.json diz $versao"
+            exit 1
+          fi
+          echo "versao $versao"
+
+      - name: SBOM (CycloneDX)
+        run: npm sbom --sbom-format cyclonedx --omit dev > sbom.cdx.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: sbom.cdx.json
+
+      - name: publicar com proveniencia
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          RETICK_PUBLICAR_SDK: sim
+
+      - name: anexar o SBOM a release
+        if: github.ref_type == 'tag'
+        run: gh release create "$GITHUB_REF_NAME" --generate-notes sbom.cdx.json || gh release upload "$GITHUB_REF_NAME" sbom.cdx.json --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}

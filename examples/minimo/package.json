@@ -1,0 +1,13 @@
+{
+  "name": "retick-exemplo-minimo",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "O menor programa que publica um fato no Retick e le o proprio cursor.",
+  "dependencies": {
+    "@retick/client": "^0.2.0"
+  },
+  "scripts": {
+    "start": "node index.mjs"
+  }
+}
