@@ -1,0 +1,23 @@
+{
+  "name": "retick-exemplo-nextjs",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Publicar e ler o Retick de um app Next.js, com a credencial presa ao servidor.",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@retick/client": "^0.2.0",
+    "next": "^15.5.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.3",
+    "@types/react": "^19.1.0",
+    "typescript": "^5.9.3"
+  }
+}

@@ -6,6 +6,24 @@ versionamento segue [SemVer](https://semver.org/lang/pt-BR/).
 Enquanto a versao comecar com `0.`, **um bump de minor pode quebrar**. A regra
 de `1.0.0` esta no README, em "Versionamento".
 
+## Nao lancado
+
+Documentacao e exemplos. Nenhuma mudanca em `src/`, e nada disto vai no tarball.
+
+### Adicionado
+
+- `docs/QUICKSTART.md`: do zero ate um fato visivel na Console, em seis passos.
+- `docs/FIRST-USE.md`: a mesma jornada com as razoes, a diferenca entre chave de
+  projeto e credencial, e os dois pontos onde o produto para hoje — o mapa de
+  tipos vazio de uma credencial de leitura emitida pela Console, e o emissor que
+  precisa estar cadastrado antes de `createAgoraReader` funcionar.
+- `docs/TROUBLESHOOTING.md`: as recusas reais de cada superficie, agrupadas pelo
+  que voce estava fazendo quando aconteceram.
+- `examples/primeiro-fato/`: publicar e ler de volta, em dois arquivos. O
+  repositorio do nucleo roda estes dois, sem alterar uma linha, contra uma pilha
+  Retick de verdade.
+- `examples/nextjs/`: o mesmo de um app Next, com a credencial presa ao servidor.
+
 ## 0.2.0 — 2026-09-24
 
 Primeira versao destinada a um registro publico. O codigo e o mesmo de `0.1.0`;
