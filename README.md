@@ -8,6 +8,17 @@ Zero dependencies. It speaks HTTP to a frozen contract, and carries no core and 
 
 Apache-2.0.
 
+## Start here
+
+If you have a Retick and have never used it, [docs/QUICKSTART.md](docs/QUICKSTART.md)
+goes from nothing to a fact visible in the Console in six steps.
+[docs/FIRST-USE.md](docs/FIRST-USE.md) is the same journey with the reasons
+attached, including the two places where the product stops short today, and
+[docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) is what to do when something
+refuses you.
+
+The rest of this file is the client's own surface, option by option.
+
 ## Install
 
 ```sh
@@ -54,6 +65,9 @@ console.log(contract.scope.project, contract.sources[0]?.contiguous)
 ```
 
 `examples/minimo/` is that, as a project you can copy: one file, one dependency, two calls.
+`examples/primeiro-fato/` is the publish-and-read pair the first-use guide walks
+through, and `examples/nextjs/` is the same thing from a Next app, with the
+credential kept on the server side of the boundary.
 
 ## Reading back
 
@@ -253,6 +267,9 @@ vocabulary and you get `projected: true` with every field `null`, and nothing fa
 
 Publish with an `entityType` of your own and accept `projected: false`. The fact is still ordered,
 deduplicated and in the cursor, which is what v1 promises.
+
+Whether it shows up on the Console is a second question, with a second list.
+[docs/FIRST-USE.md §5](docs/FIRST-USE.md#5-publish-your-first-fact) has both.
 
 **`payload` is declared optional and required in practice.** `GET /api/v1/contrato` lists it as
 optional; the route rejects a fact that arrives without it. That is divergence 17, the fix is one

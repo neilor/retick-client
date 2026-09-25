@@ -3,3 +3,7 @@ dist/
 *.tgz
 sbom.cdx.json
 .DS_Store
+.next/
+next-env.d.ts
+*.tsbuildinfo
+examples/*/package-lock.json
