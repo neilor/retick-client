@@ -1,8 +1,8 @@
 # @retick/client
 
-A TypeScript client for the Retick v1 publication gate. It publishes facts, reads back your own
-scope and cursor, and handles batching, retries, timeouts and errors so a producer does not have
-to write that code again.
+A TypeScript client for Retick. It publishes facts, reads back your own scope and cursor, reads
+the current state of a project from a browser, and handles batching, retries, timeouts and
+errors so a producer does not have to write that code again.
 
 Zero dependencies. It speaks HTTP to a frozen contract, and carries no core and no Firebase.
 
@@ -25,7 +25,9 @@ The rest of this file is the client's own surface, option by option.
 npm install @retick/client
 ```
 
-`0.2.0` is the first release on npm, published from GitHub Actions on the `v0.2.0` tag.
+`0.2.0` was the first release on npm, published from GitHub Actions on the `v0.2.0` tag. `0.3.0`
+adds the generic state view and the single `rt_` API key, and removes nothing; `CHANGELOG.md`
+lists every addition.
 Every tarball carries a signed provenance attestation, so `npm audit signatures` verifies which
 repository, commit and workflow built it. `CHANGELOG.md` is the record of what changed.
 
@@ -44,7 +46,7 @@ import type { Fact } from '@retick/client'
 
 const producer = createProducer({
   url: 'https://retick.example',   // without the /api/v1 suffix
-  token: process.env.RETICK_TOKEN!,
+  apiKey: process.env.RETICK_API_KEY!,   // rt_..., issued in the Console with facts:publish
 })
 
 const fact: Fact = {
@@ -72,12 +74,12 @@ credential kept on the server side of the boundary.
 ## Reading back
 
 The publication gate is write-only. Reading your own project is a separate
-surface, with a separate credential:
+surface. The same API key reads it if it was issued with `log:read`:
 
 ```ts
 import { createConsumer } from '@retick/client'
 
-const consumer = createConsumer({ url: 'https://retick.example', token: process.env.RETICK_READ_TOKEN! })
+const consumer = createConsumer({ url: 'https://retick.example', apiKey: process.env.RETICK_API_KEY! })
 
 await consumer.replay({
   source: 'billing',
@@ -89,10 +91,10 @@ await consumer.replay({
 returns `{ position, applied, held, withheld }`; persist `position` and hand it
 back next time.
 
-The read token starts with `rtl_`, not `rtk_`. Passing a publication token to
-`createConsumer` throws before anything leaves the machine — the separation is
-in the token format, not in a capability flag, so there is no code path where
-one credential does the other one's job.
+The 0.2.0 README said the read token starts with `rtl_`. The service never
+required that: an `rt_` with `log:read` reads the same surface. What still
+holds is that a publication token (`rtk_`) passed to `createConsumer` throws
+before anything leaves the machine.
 
 **Order is the part that looks easy.** The service hands facts over in log
 order, which is arrival order: a producer that sends 1, then 4, then 2 and 3
@@ -126,6 +128,73 @@ await reader.snapshot()
 It holds nothing on disk — no `localStorage`, no cookie — and never puts the
 token in a URL, which is why the live path is NDJSON over `fetch` and not
 `EventSource`.
+
+### Reading the current state of any project
+
+The Agora is a compact projection with a fixed vocabulary. For your own facts,
+pass `view: 'state'`: the reader asks for the generic view instead, where every
+`entityType` is a collection, every `entityId` an entity, and every payload
+field holds its current value, last write wins.
+
+```ts
+import { createAgoraReader, type StateView } from '@retick/client'
+
+const reader = createAgoraReader({
+  url: 'https://retick.example',
+  view: 'state',
+  credentials: async () => mintFromMyOwnBackend(),
+})
+
+reader.subscribe((snapshot) => {
+  const state = snapshot.agora as unknown as StateView
+  render(state.entidades.search?.['srch-1']?.campos.status)
+})
+await reader.snapshot()
+```
+
+Each entity carries `campos` (the values), `procedencia` (for each field, the
+source, `sourceVersion` and receipt time of the fact that wrote it) and
+`observadoEm`. `fontes` holds the health of each source you can see: applied,
+held behind a gap, and the contiguous version.
+
+The service cuts the view by the credential, field by field. A browser session
+needs the `estado.ler` capability, which the project owner grants per issuer;
+`agora.ler` alone gets a `403`, and the reader stops instead of retrying. A
+source outside your scope does not appear at all, not even by name.
+
+`view` is new in 0.3.0. Leaving it out reads the Agora, exactly as 0.2.0 did,
+and `STATE_ROUTES` sits next to `AGORA_ROUTES` if you need the paths. The state
+routes need a Retick that serves them; an older one answers `404`, which the
+reader reports as `stale`.
+
+### Two phones, one backend
+
+The browser never holds an API key. Passing `apiKey` in a browser throws at
+construction, before the first request. The shape that works is the one the
+Agora already used: your backend holds the key and mints a short browser
+session per person, and each phone reads with it.
+
+```ts
+// server: your route, behind your own login
+app.post('/retick-session', requireUser, async (req, res) => {
+  // exchange your signed assertion for an rtv_ at POST /api/navegador/v1/sessao,
+  // with the issuer the project owner registered in the Console
+  const { token, expiraEm } = await exchangeAssertion(req.user)
+  res.json({ token, expiresAt: expiraEm })
+})
+
+// each phone
+const reader = createAgoraReader({
+  url: 'https://retick.example',
+  view: 'state',
+  credentials: async () => (await fetch('/retick-session', { method: 'POST' })).json(),
+})
+```
+
+Moving off a mirror you maintain yourself (a realtime database written after
+each accepted fact, say) is a matter of running both side by side: render from
+the reader, compare with the mirror on every change you care about, and remove
+the mirror once they have agreed for long enough to trust it.
 
 ### Leaving is two different acts
 
@@ -169,6 +238,26 @@ would manufacture the gap that ordering exists to close.
 
 There is no third method. The v1 contract has two routes, and a client with more methods than
 the service has routes would be inventing a surface nobody can honour.
+
+## The control plane
+
+`createControlPlane` is the client the Retick CLI and MCP server use for `/api/plano/v1`:
+workspaces, projects, environments, sources, usage, key metadata and trails, and data
+credentials. It takes an `rta_` or an `rt_` with `project:admin`.
+
+```ts
+import { createControlPlane } from '@retick/client'
+
+const plane = createControlPlane({ url: 'https://retick.example', token: process.env.RETICK_ADMIN_KEY! })
+const projects = await plane.projects()
+```
+
+No method reads a secret back, because no route returns one. The single response that carries
+one, `issueDataCredential`, names it `secretShownOnce`.
+
+It is a server tool. Unlike `apiKey`, it does not refuse to run in a browser, so never construct
+it in one. Its error messages are in Portuguese, the language of the service it was written
+for, and its tests need a running Retick, so none of them live in this repository.
 
 ## What comes back, and what throws
 
@@ -225,7 +314,8 @@ because a proxy in front of the service can emit it, and meeting it unhandled co
 | option | default | |
 |---|---|---|
 | `url` | — | base URL, without `/api/v1` |
-| `token` | — | `rtk_...`, held in memory only |
+| `apiKey` | — | `rt_...`, the single API key; server-side only, held in memory |
+| `token` | — | `rtk_...`, the older publication credential, still accepted |
 | `timeoutMs` | `30000` | per request, covering the body |
 | `retries` | `3` | extra attempts after the first |
 | `retryBaseDelayMs` | `200` | first backoff ceiling, doubling per attempt |
@@ -252,10 +342,13 @@ It does not validate facts before sending. The service decides what it accepts, 
 is never a compatible change: a client that pre-rejected would keep rejecting after the service
 learned to accept.
 
-It does not write the token anywhere. It is held in a closure and sent in an `Authorization`
-header. Only the prefix `rtk_<12 hex>` appears in an error, which is what the service logs and
-what identifies a credential for revocation. A token that does not match the format is not echoed
-at all.
+It does not write the credential anywhere. It is held in a closure and sent in an
+`Authorization` header. Only its prefix appears in an error, which is what the service logs and
+what identifies a credential for revocation. A credential that does not match a known format is
+not echoed at all.
+
+It does not let an API key into a browser. `apiKey` throws at construction when the code runs in
+one, and names the alternative in the message.
 
 ## Two traps
 
@@ -297,7 +390,7 @@ anyway: `@retick/cli` and whatever comes after it arrive without a second round 
 Semantic versioning.
 
 **While the version starts with `0.`, a minor bump may break you.** That is the semver rule and
-most people read past it, so: pin with `~0.2.0` if a break would cost you something.
+most people read past it, so: pin with `~0.3.0` if a break would cost you something.
 
 `1.0.0` is one specific promise. `createProducer`, `createConsumer` and `createAgoraReader` stop
 changing shape without a major. The publication surface has held still since the contract was
@@ -311,8 +404,8 @@ version being published.
 
 The full test suite. The tests that drive this client against a running Retick, `producer` and
 `consumer`, need the service on the other end, and the service is a separate, private
-repository. What lives here is the 53 tests that need nothing standing up: the Agora reader,
-batching, and the network layer with `fetch` injected.
+repository. What lives here are the tests that need nothing standing up: the Agora and state
+readers, the credential rules, batching, and the network layer with `fetch` injected.
 
 The split costs something. A fork can change `src/producer.ts` and still see green.
 `scripts/provar-instalacao-avulsa.sh` is what covers the gap: it packs the tarball, installs it

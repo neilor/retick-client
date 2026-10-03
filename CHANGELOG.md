@@ -24,23 +24,26 @@ Documentacao e exemplos. Nenhuma mudanca em `src/`, e nada disto vai no tarball.
   Retick de verdade.
 - `examples/nextjs/`: o mesmo de um app Next, com a credencial presa ao servidor.
 
-## 0.3.0 — nao lancado (candidata do D-20261003-003)
+## 0.3.0 — nao lancado
 
-O codigo de `packages/client` do monorepo `neilor/retick` na composicao
-`integracao/D-20261003-003-navegador`. Tudo aditivo: quem usa 0.2.0 sem mudar
-nada continua com o mesmo comportamento.
+Tudo aditivo: quem usa 0.2.0 sem mudar nada continua com o mesmo
+comportamento. Nenhum export da 0.2.0 saiu.
 
 ### Adicionado
 
 - `createAgoraReader({ view: 'state' })` le a vista generica `estado/v1`
   (`STATE_ROUTES`: `/api/navegador/v1/estado` e `/estado/stream`). O padrao
   continua `view: 'agora'`. Tipos `ReaderView`, `StateView`, `StateEntity`.
-  Exige o servico com o PR neilor/retick#48 publicado.
-- `apiKey` em `createProducer` e `createConsumer`, para a credencial unica `rt_`
+  Exige um Retick que sirva a vista `estado/v1`; um mais antigo responde `404`
+  nessas rotas.
+- `apiKey` em `createProducer`, `createConsumer` e `createAgoraReader` (este
+  com `state:read`, para um processo de servidor), para a credencial unica `rt_`
   emitida pela Console. Recusada no navegador antes do primeiro pedido
   (`isBrowser`). `token` com `rtk_`/`rtl_` continua valendo.
 - `control.ts`: cliente do control plane (`/api/plano/v1`), que a CLI e o MCP
   do Retick ja usam. Superficie publica nova.
+- README: a vista de estado, a `apiKey` e o caminho de dois celulares com uma
+  sessao de navegador emitida pelo backend.
 
 ### Corrigido
 
