@@ -40,8 +40,6 @@ comportamento. Nenhum export da 0.2.0 saiu.
   com `state:read`, para um processo de servidor), para a credencial unica `rt_`
   emitida pela Console. Recusada no navegador antes do primeiro pedido
   (`isBrowser`). `token` com `rtk_`/`rtl_` continua valendo.
-- `control.ts`: cliente do control plane (`/api/plano/v1`), que a CLI e o MCP
-  do Retick ja usam. Superficie publica nova.
 - README: a vista de estado, a `apiKey` e o caminho de dois celulares com uma
   sessao de navegador emitida pelo backend.
 

@@ -239,26 +239,6 @@ would manufacture the gap that ordering exists to close.
 There is no third method. The v1 contract has two routes, and a client with more methods than
 the service has routes would be inventing a surface nobody can honour.
 
-## The control plane
-
-`createControlPlane` is the client the Retick CLI and MCP server use for `/api/plano/v1`:
-workspaces, projects, environments, sources, usage, key metadata and trails, and data
-credentials. It takes an `rta_` or an `rt_` with `project:admin`.
-
-```ts
-import { createControlPlane } from '@retick/client'
-
-const plane = createControlPlane({ url: 'https://retick.example', token: process.env.RETICK_ADMIN_KEY! })
-const projects = await plane.projects()
-```
-
-No method reads a secret back, because no route returns one. The single response that carries
-one, `issueDataCredential`, names it `secretShownOnce`.
-
-It is a server tool. Unlike `apiKey`, it does not refuse to run in a browser, so never construct
-it in one. Its error messages are in Portuguese, the language of the service it was written
-for, and its tests need a running Retick, so none of them live in this repository.
-
 ## What comes back, and what throws
 
 A rejected fact comes back in `outcomes` and does not throw. `422` means at least one fact was

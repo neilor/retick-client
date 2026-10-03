@@ -98,38 +98,3 @@ export type {
   StateEntity,
   StateView,
 } from './agora.ts'
-
-/**
- * The third port: the control plane. Workspaces, projects, environments,
- * sources, usage, API-key metadata and data credentials — never a secret read
- * back, because no route returns one. Added under `D-20260923-007`, when the
- * CLI and the MCP server both needed it and neither could own it.
- */
-export {
-  createControlPlane,
-  controlKeyFamily,
-  RetickContractError,
-  CONTROL_BASE,
-  CONTROL_KEY_PREFIX,
-  CONTROL_KEY_PREFIXES,
-  CONTROL_ROUTES,
-  CONTROL_VERSION,
-} from './control.ts'
-export type {
-  ApiKeyEvent,
-  ApiKeyMetadata,
-  Capability,
-  ControlKeyFamily,
-  ControlPlane,
-  ControlPlaneOptions,
-  DataCredentialMetadata,
-  Environment,
-  IssuedDataCredential,
-  Operation,
-  Project,
-  ProjectKeyMetadata,
-  Source,
-  Usage,
-  WhoAmI,
-  Workspace,
-} from './control.ts'
