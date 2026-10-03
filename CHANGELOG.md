@@ -24,6 +24,29 @@ Documentacao e exemplos. Nenhuma mudanca em `src/`, e nada disto vai no tarball.
   Retick de verdade.
 - `examples/nextjs/`: o mesmo de um app Next, com a credencial presa ao servidor.
 
+## 0.3.0 — nao lancado (candidata do D-20261003-003)
+
+O codigo de `packages/client` do monorepo `neilor/retick` na composicao
+`integracao/D-20261003-003-navegador`. Tudo aditivo: quem usa 0.2.0 sem mudar
+nada continua com o mesmo comportamento.
+
+### Adicionado
+
+- `createAgoraReader({ view: 'state' })` le a vista generica `estado/v1`
+  (`STATE_ROUTES`: `/api/navegador/v1/estado` e `/estado/stream`). O padrao
+  continua `view: 'agora'`. Tipos `ReaderView`, `StateView`, `StateEntity`.
+  Exige o servico com o PR neilor/retick#48 publicado.
+- `apiKey` em `createProducer` e `createConsumer`, para a credencial unica `rt_`
+  emitida pela Console. Recusada no navegador antes do primeiro pedido
+  (`isBrowser`). `token` com `rtk_`/`rtl_` continua valendo.
+- `control.ts`: cliente do control plane (`/api/plano/v1`), que a CLI e o MCP
+  do Retick ja usam. Superficie publica nova.
+
+### Corrigido
+
+- O README de 0.2.0 dizia que a leitura exige `rtl_`. Uma `rt_` com `log:read`
+  le a mesma superficie.
+
 ## 0.2.0 — 2026-09-24
 
 Primeira versao destinada a um registro publico. O codigo e o mesmo de `0.1.0`;

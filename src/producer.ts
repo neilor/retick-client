@@ -26,6 +26,7 @@
  * `Authorization` header, and only its prefix ever appears in an error.
  */
 
+import { resolveCredential, type CredentialOptions } from './credential.ts'
 import { RetickConfigError } from './errors.ts'
 import { request, type HttpConfig } from './http.ts'
 import {
@@ -48,11 +49,16 @@ import {
   type RespostaDePublicacaoWire,
 } from './wire.ts'
 
-export type ProducerOptions = {
+export type ProducerOptions = CredentialOptions & {
   /** Base URL of the service, without the `/api/v1` suffix. */
   url: string
-  /** `rtk_...`. Held in memory only. */
-  token: string
+  /**
+   * The single Retick API key, `rt_...`, scoped to include `facts:publish`.
+   * Server-side only; see `credential.ts`. Held in memory only.
+   */
+  apiKey?: string
+  /** `rtk_...`, a publication token from before the single credential. */
+  token?: string
   /** Per request, covering the answer and its body. Default 30000. */
   timeoutMs?: number
   /** Extra attempts after the first, for the failures worth repeating. Default 3. */
@@ -171,8 +177,14 @@ export function createProducer(options: ProducerOptions): Producer {
     )
   }
 
-  const token = (options.token ?? '').trim()
-  if (token === '') throw new RetickConfigError('token is required')
+  const token = resolveCredential(options, {
+    factory: 'createProducer',
+    legacyPrefix: 'rtk_',
+    // A publication credential in a page is a publication credential in a
+    // bundle. There is no version of this entry point that belongs in a
+    // browser.
+    allowBrowser: false,
+  })
 
   const fetchImpl = options.fetch ?? globalThis.fetch
   if (typeof fetchImpl !== 'function') {

@@ -45,6 +45,8 @@
  */
 
 import type { ReadFact } from './consumer.ts'
+import { resolveCredential } from './credential.ts'
+import { RetickConfigError } from './errors.ts'
 
 /** Version of the browser-facing contract this reader speaks. */
 export const AGORA_ROUTES = {
@@ -52,6 +54,46 @@ export const AGORA_ROUTES = {
   snapshot: '/api/navegador/v1/agora',
   stream: '/api/navegador/v1/agora/stream',
 } as const
+
+/**
+ * Routes of the generic `estado/v1` view: current entities and fields of any
+ * project, cut down to what the credential may see. Same session route, same
+ * envelope, same cursor rules; only the content of `agora` differs.
+ */
+export const STATE_ROUTES = {
+  session: AGORA_ROUTES.session,
+  snapshot: '/api/navegador/v1/estado',
+  stream: '/api/navegador/v1/estado/stream',
+} as const
+
+/**
+ * Which projection the reader asks for.
+ *
+ * - `agora` — the compact Agora (`agora/v2`), the default and the only view up
+ *   to 0.2.0.
+ * - `state` — the generic view (`estado/v1`). A browser session needs the
+ *   `estado.ler` capability for it; an `rt_` key needs `state:read`.
+ */
+export type ReaderView = 'agora' | 'state'
+
+/** The `agora` field of a snapshot read with `view: 'state'`. */
+export type StateView = {
+  /** entityType -> entityId -> entity. */
+  entidades: Record<string, Record<string, StateEntity>>
+  /** Health of each source the credential reaches. Sources outside it never appear. */
+  fontes: Record<
+    string,
+    { aplicados: number; retidos: number; contiguo: number | null; ultimoObservadoEm: string | null }
+  >
+}
+
+export type StateEntity = {
+  /** Current value of each payload field, last write wins. */
+  campos: Record<string, unknown>
+  /** Which fact wrote each value. */
+  procedencia: Record<string, { fonte: string; sourceVersion: number; observadoEm: string }>
+  observadoEm: string
+}
 
 export type Credentials = {
   token: string
@@ -113,6 +155,11 @@ export type AgoraReaderOptions = {
   /** Base URL of the Retick service. No trailing slash needed. */
   url: string
   /**
+   * Which projection to read. Defaults to `agora`, so every reader written for
+   * 0.2.0 keeps reading exactly what it read. See `ReaderView`.
+   */
+  view?: ReaderView
+  /**
    * Supplied by the host. The reader never learns where it comes from, and
    * never stores it.
    *
@@ -121,7 +168,19 @@ export type AgoraReaderOptions = {
    * knew how to mint its own credential would be a reader that could mint one
    * after logout.
    */
-  credentials: () => Promise<Credentials>
+  credentials?: () => Promise<Credentials>
+  /**
+   * The single Retick API key, `rt_...`, scoped to include `state:read`.
+   *
+   * SERVER-SIDE ONLY, and it throws in a browser — see `credential.ts`. It is
+   * the alternative to `credentials` for a process that has no session to mint:
+   * a job, a dashboard backend, a script. Pass one or the other, not both.
+   *
+   * With an API key there is nothing to renew and nothing to revoke from here:
+   * the key has its own expiry, set when it was issued, and it is revoked in
+   * the Console. `revoke()` says so instead of calling a route that would 404.
+   */
+  apiKey?: string
   /**
    * Freshness floor. Protects the service's single instance from a tab in a
    * loop — including a tab in a loop caused by a bug in this file.
@@ -177,6 +236,46 @@ const TERMINAIS: ReaderStatus[] = ['unauthorized', 'forbidden']
 
 export function createAgoraReader(op: AgoraReaderOptions): AgoraReader {
   const base = op.url.replace(/\/+$/, '')
+  if (op.view !== undefined && op.view !== 'agora' && op.view !== 'state') {
+    throw new RetickConfigError(`createAgoraReader: unknown view ${JSON.stringify(op.view)}; use 'agora' or 'state'`)
+  }
+  const rotas = op.view === 'state' ? STATE_ROUTES : AGORA_ROUTES
+
+  /**
+   * One source of credential, chosen at construction.
+   *
+   * `apiKey` is validated and browser-checked by `resolveCredential`; the
+   * session path is untouched and is still the only one a page may take.
+   */
+  if (op.apiKey !== undefined && op.credentials !== undefined) {
+    throw new RetickConfigError(
+      'createAgoraReader: pass either apiKey or credentials, not both — ' +
+        'an API key is a server credential and a session is a browser one',
+    )
+  }
+  if (op.apiKey === undefined && op.credentials === undefined) {
+    throw new RetickConfigError('createAgoraReader: apiKey or credentials is required')
+  }
+  const chaveDeApi =
+    op.apiKey === undefined
+      ? null
+      : resolveCredential({ apiKey: op.apiKey }, {
+          factory: 'createAgoraReader',
+          legacyPrefix: 'rtv_',
+          allowBrowser: false,
+        })
+  /**
+   * An API key does not expire from the reader's point of view.
+   *
+   * It DOES expire — the Console sets a date — but the reader has no way to
+   * learn when, and inventing a date here would make it renew a credential
+   * that has no renewal route. When the key stops working the service says
+   * `401`, and the reader already knows what to do with that.
+   */
+  const obterCredencial: () => Promise<Credentials> =
+    chaveDeApi === null
+      ? (op.credentials as () => Promise<Credentials>)
+      : async () => ({ token: chaveDeApi, expiresAt: '9999-12-31T23:59:59.999Z' })
   const agora = op.now ?? (() => new Date())
   const buscar = op.fetchImpl ?? globalThis.fetch.bind(globalThis)
   const minIntervalo = op.minIntervalMs ?? DEFAULT_MIN_INTERVAL_MS
@@ -261,7 +360,7 @@ export function createAgoraReader(op: AgoraReaderOptions): AgoraReader {
       return credencial
     }
     try {
-      credencial = await op.credentials()
+      credencial = await obterCredencial()
       return credencial
     } catch (e) {
       estado = 'unauthorized'
@@ -324,7 +423,7 @@ export function createAgoraReader(op: AgoraReaderOptions): AgoraReader {
 
     let r: Response
     try {
-      r = await pedir(AGORA_ROUTES.snapshot, c)
+      r = await pedir(rotas.snapshot, c)
     } catch {
       estado = 'offline'
       razao = 'rede'
@@ -369,7 +468,7 @@ export function createAgoraReader(op: AgoraReaderOptions): AgoraReader {
     if (!c) return
 
     abortar = new AbortController()
-    const caminho = cursor > 0 ? `${AGORA_ROUTES.stream}?desde=${cursor}` : AGORA_ROUTES.stream
+    const caminho = cursor > 0 ? `${rotas.stream}?desde=${cursor}` : rotas.stream
 
     let r: Response
     try {
@@ -496,6 +595,24 @@ export function createAgoraReader(op: AgoraReaderOptions): AgoraReader {
       return 'nothing-to-revoke'
     }
 
+    /**
+     * An API key is not revoked from here, and pretending otherwise would be
+     * worse than saying so.
+     *
+     * The DELETE route ends a BROWSER SESSION — a row in
+     * `plano_sessao_navegador`. An `rt_` has no such row: it is revoked in the
+     * Console, by a person, and that revocation is immediate for every process
+     * holding it. Calling the route with an API key would 404, and the `404`
+     * would be reported as `unreachable` — which reads like a network problem
+     * and would send somebody looking for one.
+     *
+     * The local forgetting still happens: this reader stops using the key.
+     */
+    if (chaveDeApi !== null) {
+      esquecer()
+      return 'nothing-to-revoke'
+    }
+
     const parar = new AbortController()
     let despertador: ReturnType<typeof setTimeout> | undefined
     const expirar = new Promise<'unreachable'>((resolver) => {
@@ -507,7 +624,7 @@ export function createAgoraReader(op: AgoraReaderOptions): AgoraReader {
 
     try {
       const r = await Promise.race([
-        buscar(`${base}${AGORA_ROUTES.session}`, {
+        buscar(`${base}${rotas.session}`, {
           method: 'DELETE',
           headers: cabecalhos(c),
           signal: parar.signal,

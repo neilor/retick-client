@@ -25,6 +25,7 @@
  * reorder without ceasing to be a cursor.
  */
 
+import { resolveCredential, type CredentialOptions } from './credential.ts'
 import { RetickConfigError } from './errors.ts'
 import { request, type HttpConfig } from './http.ts'
 import type { Fact } from './types.ts'
@@ -130,11 +131,17 @@ export type ReadContract = {
   response: unknown
 }
 
-export type ConsumerOptions = {
+export type ConsumerOptions = CredentialOptions & {
   /** Base URL of the service, without the `/api/leitura/v1` suffix. */
   url: string
   /** `rtl_...`. A publication token (`rtk_...`) is refused by format. */
-  token: string
+  /**
+   * The single Retick API key, `rt_...`, scoped to include `log:read`.
+   * Server-side only; see `credential.ts`.
+   */
+  apiKey?: string
+  /** `rtl_...`, a read token from before the single credential. */
+  token?: string
   timeoutMs?: number
   retries?: number
   retryBaseDelayMs?: number
@@ -247,14 +254,19 @@ export function createConsumer(options: ConsumerOptions): Consumer {
     )
   }
 
-  const token = (options.token ?? '').trim()
-  if (token === '') throw new RetickConfigError('token is required')
+  const token = resolveCredential(options, {
+    factory: 'createConsumer',
+    legacyPrefix: 'rtl_',
+    // This entry point pages the RAW log. Never a browser.
+    allowBrowser: false,
+  })
   if (/^rtk_/.test(token)) {
     // Caught here rather than as a 401 from the server, because the message the
     // server can safely give is "malformed" and that sends people looking for a
     // typo instead of for the wrong token.
     throw new RetickConfigError(
-      'this is a publication token; the read surface needs a read token (rtl_...)',
+      'this is a publication token; the read surface needs a read token (rtl_...) ' +
+        'or an rt_ API key with the log:read operation',
     )
   }
 
