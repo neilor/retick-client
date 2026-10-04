@@ -104,7 +104,60 @@ without a server.
 `pull` gives you one raw page if you want to handle the gaps yourself. A projection built from
 those pages is pure functions over facts, and never calls the system of record.
 
-## Reading the Agora from a browser
+## Reading state from a browser
+
+`createStateReader` reads the current state of your entities, cut to exactly
+the sources the credential names. Two users of one party, with
+`["user-a", "party-1"]` and `["user-b", "party-1"]`, each see their own source
+and the party, never each other.
+
+```ts
+import { createStateReader } from '@retick/client'
+
+const reader = createStateReader({
+  url: 'https://retick.example',
+  // Your backend: authenticate the user, decide which sources they may read,
+  // sign a short assertion with exactly those, exchange it, return { token, expiresAt }.
+  credentials: async () => (await fetch('/api/retick-session', { method: 'POST' })).json(),
+})
+
+const unsubscribe = reader.subscribe((snapshot, freshness) => render(snapshot.state.entities, freshness))
+await reader.snapshot()
+```
+
+What your backend does for `credentials()` (browser contract §3):
+
+1. Authenticates its own user. Retick never decides membership.
+2. Signs an ES256 JWT, at most 300 seconds long, with the issuer and audience
+   registered for the project, and
+   `retick: { project, capabilities: ["state:read"], sources: [...] }`.
+   `sources` must be the exact list for this user: missing or `[]` is refused,
+   and one source outside the issuer's ceiling refuses the whole request.
+3. `POST /api/browser/v1/session` with `{ "assertion": "<jwt>" }` and the page's
+   `Origin`, and returns `token` and `expiresAt` from the `201`.
+
+The reader keeps only the latest view in memory, sends the token in the
+`Authorization` header and never in a URL, and streams NDJSON over `fetch`.
+Every line is the whole visible state. A `401`, or an `end` line, renews the
+credential once; a renewed credential that is refused again stops the reader.
+After a renewal the stream starts over instead of resuming, so a user whose
+sources changed never keeps seeing the old ones. A stream already open learns
+about a logout or a revoked key within about 5 seconds (the service's check
+interval); new requests are refused at once.
+
+`freshness()` gives `status`, `ageSeconds` (age of the view as last confirmed
+by the service, including heartbeats), `lastContactAt` and an English `reason`:
+`no_credential`, `network`, `forbidden`, `session_closed`, `rate_limited`,
+`service_unavailable`, `connection_lost`, `closed`, `expired` or `revoked`.
+
+`close()` and `revoke()` work as described below for the Agora reader;
+`revoke()` sends one `DELETE /api/browser/v1/session`. With an `apiKey`
+(server only) nothing is revoked from here: keys are revoked in the Console.
+
+## Reading the Agora from a browser (Exo's bridge)
+
+New apps should use `createStateReader`. The Agora reader keeps serving Exo's Mesa.
+
 
 `createAgoraReader` is the third surface, and the only one meant for a tab. It
 reads the compact projection the service already materialized, with an `rtv_`

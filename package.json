@@ -1,9 +1,9 @@
 {
   "name": "@retick/client",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "license": "Apache-2.0",
   "type": "module",
-  "description": "Client for Retick: publish facts, read your own scope by cursor, and read the compact Agora projection from a browser.",
+  "description": "Client for Retick: publish facts, read your own scope by cursor, and read the current state of your entities from a browser, cut to the sources each user may see.",
   "keywords": [
     "retick",
     "event-sourcing",
@@ -12,7 +12,9 @@
     "cursor",
     "projection",
     "typescript",
-    "client"
+    "client",
+    "browser",
+    "state"
   ],
   "homepage": "https://github.com/neilor/retick-client#readme",
   "bugs": {

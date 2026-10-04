@@ -25,6 +25,8 @@
 export { createProducer, splitIntoBatches } from './producer.ts'
 export type { Producer, ProducerOptions } from './producer.ts'
 
+export type { CredentialOptions } from './credential.ts'
+
 export {
   RetickAuthError,
   RetickConfigError,
@@ -81,6 +83,25 @@ export type {
   SourceReadState,
   Withheld,
 } from './consumer.ts'
+
+/**
+ * The browser state reader (SDK 0.3.0, browser contract §11): the current
+ * state of a project's entities, cut to exactly the sources the credential
+ * names. Shares `Credentials`, `ReaderStatus` and `RevocationOutcome` with the
+ * Agora reader below, which stays as Exo's bridge.
+ */
+export { createStateReader, STATE_ROUTES, STATE_VERSION } from './state.ts'
+export type {
+  FieldProvenance,
+  SourceHealth,
+  StateEntity,
+  StateFreshness,
+  StateReader,
+  StateReaderOptions,
+  StateReaderReason,
+  StateSnapshot,
+  StateView,
+} from './state.ts'
 
 export { AGORA_ROUTES, createAgoraReader } from './agora.ts'
 export type {

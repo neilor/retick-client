@@ -45,6 +45,8 @@
  */
 
 import type { ReadFact } from './consumer.ts'
+import { resolveCredential } from './credential.ts'
+import { RetickConfigError } from './errors.ts'
 
 /** Version of the browser-facing contract this reader speaks. */
 export const AGORA_ROUTES = {
@@ -121,7 +123,19 @@ export type AgoraReaderOptions = {
    * knew how to mint its own credential would be a reader that could mint one
    * after logout.
    */
-  credentials: () => Promise<Credentials>
+  credentials?: () => Promise<Credentials>
+  /**
+   * The single Retick API key, `rt_...`, scoped to include `state:read`.
+   *
+   * SERVER-SIDE ONLY, and it throws in a browser — see `credential.ts`. It is
+   * the alternative to `credentials` for a process that has no session to mint:
+   * a job, a dashboard backend, a script. Pass one or the other, not both.
+   *
+   * With an API key there is nothing to renew and nothing to revoke from here:
+   * the key has its own expiry, set when it was issued, and it is revoked in
+   * the Console. `revoke()` says so instead of calling a route that would 404.
+   */
+  apiKey?: string
   /**
    * Freshness floor. Protects the service's single instance from a tab in a
    * loop — including a tab in a loop caused by a bug in this file.
@@ -177,6 +191,42 @@ const TERMINAIS: ReaderStatus[] = ['unauthorized', 'forbidden']
 
 export function createAgoraReader(op: AgoraReaderOptions): AgoraReader {
   const base = op.url.replace(/\/+$/, '')
+
+  /**
+   * One source of credential, chosen at construction.
+   *
+   * `apiKey` is validated and browser-checked by `resolveCredential`; the
+   * session path is untouched and is still the only one a page may take.
+   */
+  if (op.apiKey !== undefined && op.credentials !== undefined) {
+    throw new RetickConfigError(
+      'createAgoraReader: pass either apiKey or credentials, not both — ' +
+        'an API key is a server credential and a session is a browser one',
+    )
+  }
+  if (op.apiKey === undefined && op.credentials === undefined) {
+    throw new RetickConfigError('createAgoraReader: apiKey or credentials is required')
+  }
+  const chaveDeApi =
+    op.apiKey === undefined
+      ? null
+      : resolveCredential({ apiKey: op.apiKey }, {
+          factory: 'createAgoraReader',
+          legacyPrefix: 'rtv_',
+          allowBrowser: false,
+        })
+  /**
+   * An API key does not expire from the reader's point of view.
+   *
+   * It DOES expire — the Console sets a date — but the reader has no way to
+   * learn when, and inventing a date here would make it renew a credential
+   * that has no renewal route. When the key stops working the service says
+   * `401`, and the reader already knows what to do with that.
+   */
+  const obterCredencial: () => Promise<Credentials> =
+    chaveDeApi === null
+      ? (op.credentials as () => Promise<Credentials>)
+      : async () => ({ token: chaveDeApi, expiresAt: '9999-12-31T23:59:59.999Z' })
   const agora = op.now ?? (() => new Date())
   const buscar = op.fetchImpl ?? globalThis.fetch.bind(globalThis)
   const minIntervalo = op.minIntervalMs ?? DEFAULT_MIN_INTERVAL_MS
@@ -249,27 +299,53 @@ export function createAgoraReader(op: AgoraReaderOptions): AgoraReader {
     anunciar()
   }
 
+  /*
+   * The renewal in flight, shared by every path that needs one (D-20261003-017).
+   *
+   * The snapshot and the stream can learn the credential is dead at the same
+   * moment. Each used to call the host on its own, so one revocation cost two
+   * `credentials()` calls, and a 401 arriving late for a token the other path
+   * had already replaced cost a third. Cleared when it settles: a later
+   * revocation is a new event and gets its own renewal.
+   */
+  let pendingRenewal: Promise<Credentials | null> | null = null
+
   /**
    * Fetches a credential, renewing at most once per failed attempt.
    *
    * `forcar` is what makes "renew once" enforceable: the 401 path asks for a
    * fresh one, and if the fresh one also gets 401, the caller gives up instead
    * of asking again.
+   *
+   * `refused` is the credential the 401 was about. If it is no longer the
+   * current one, another path already renewed, and that answer is reused
+   * instead of minting again.
    */
-  async function credenciais(forcar = false): Promise<Credentials | null> {
-    if (!forcar && credencial && Date.parse(credencial.expiresAt) > agora().getTime()) {
-      return credencial
+  async function credenciais(forcar = false, refused?: Credentials): Promise<Credentials | null> {
+    const current = credencial
+    const valid = current !== null && Date.parse(current.expiresAt) > agora().getTime()
+    if (valid && (!forcar || (refused !== undefined && current.token !== refused.token))) {
+      return current
     }
-    try {
-      credencial = await op.credentials()
-      return credencial
-    } catch (e) {
-      estado = 'unauthorized'
-      razao = 'sem credencial'
-      credencial = null
-      void e
-      return null
-    }
+    pendingRenewal ??= (async () => {
+      try {
+        const fresh = await obterCredencial()
+        // `close()` may have landed while the host was minting. Keeping the
+        // answer would put a credential back into a reader that forgot it.
+        if (fechado) return null
+        credencial = fresh
+        return fresh
+      } catch (e) {
+        estado = 'unauthorized'
+        razao = 'sem credencial'
+        credencial = null
+        void e
+        return null
+      } finally {
+        pendingRenewal = null
+      }
+    })()
+    return pendingRenewal
   }
 
   function cabecalhos(c: Credentials): Record<string, string> {
@@ -310,7 +386,7 @@ export function createAgoraReader(op: AgoraReaderOptions): AgoraReader {
     return 'recuar'
   }
 
-  async function buscarSnapshot(jaRenovou = false): Promise<AgoraSnapshot | null> {
+  async function buscarSnapshot(jaRenovou = false, refused?: Credentials): Promise<AgoraSnapshot | null> {
     if (fechado) return null
     /*
      * The floor is stamped HERE, and not only in `refresh`. `snapshot()` is a
@@ -319,7 +395,7 @@ export function createAgoraReader(op: AgoraReaderOptions): AgoraReader {
      * make two requests where the floor promised one.
      */
     ultimaBusca = agora().getTime()
-    const c = await credenciais(jaRenovou)
+    const c = await credenciais(jaRenovou, refused)
     if (!c) return null
 
     let r: Response
@@ -335,7 +411,7 @@ export function createAgoraReader(op: AgoraReaderOptions): AgoraReader {
     if (fechado) return null
 
     const d = decidir(r.status, jaRenovou)
-    if (d === 'renovar') return buscarSnapshot(true)
+    if (d === 'renovar') return buscarSnapshot(true, c)
     if (d === 'parar') {
       estado = r.status === 403 ? 'forbidden' : 'unauthorized'
       razao = r.status === 403 ? 'sem permissao' : 'sessao encerrada'
@@ -363,9 +439,9 @@ export function createAgoraReader(op: AgoraReaderOptions): AgoraReader {
    * cursor it sends only what was missed; if not, it sends a full snapshot
    * marked `reinicio`, and `aplicar` replaces instead of merging.
    */
-  async function abrirStream(jaRenovou = false): Promise<void> {
+  async function abrirStream(jaRenovou = false, refused?: Credentials): Promise<void> {
     if (fechado) return
-    const c = await credenciais(jaRenovou)
+    const c = await credenciais(jaRenovou, refused)
     if (!c) return
 
     abortar = new AbortController()
@@ -393,7 +469,7 @@ export function createAgoraReader(op: AgoraReaderOptions): AgoraReader {
     if (fechado) return
 
     const d = decidir(r.status, jaRenovou)
-    if (d === 'renovar') return abrirStream(true)
+    if (d === 'renovar') return abrirStream(true, c)
     if (d === 'parar') {
       estado = r.status === 403 ? 'forbidden' : 'unauthorized'
       razao = r.status === 403 ? 'sem permissao' : 'sessao encerrada'
@@ -492,6 +568,24 @@ export function createAgoraReader(op: AgoraReaderOptions): AgoraReader {
     abortar?.abort()
 
     if (!c) {
+      esquecer()
+      return 'nothing-to-revoke'
+    }
+
+    /**
+     * An API key is not revoked from here, and pretending otherwise would be
+     * worse than saying so.
+     *
+     * The DELETE route ends a BROWSER SESSION — a row in
+     * `plano_sessao_navegador`. An `rt_` has no such row: it is revoked in the
+     * Console, by a person, and that revocation is immediate for every process
+     * holding it. Calling the route with an API key would 404, and the `404`
+     * would be reported as `unreachable` — which reads like a network problem
+     * and would send somebody looking for one.
+     *
+     * The local forgetting still happens: this reader stops using the key.
+     */
+    if (chaveDeApi !== null) {
       esquecer()
       return 'nothing-to-revoke'
     }

@@ -24,6 +24,26 @@ Documentacao e exemplos. Nenhuma mudanca em `src/`, e nada disto vai no tarball.
   Retick de verdade.
 - `examples/nextjs/`: o mesmo de um app Next, com a credencial presa ao servidor.
 
+## 0.3.0 — candidate, not released
+
+### Added
+
+- `createStateReader`, `STATE_ROUTES` and `STATE_VERSION`: reads the current
+  state of a project's entities from a browser, cut to exactly the sources the
+  credential names (`GET /api/browser/v1/state` and its NDJSON stream). The
+  credential comes from the app's backend through `POST /api/browser/v1/session`.
+  One renewal per reader; after a renewal the stream starts over, so a user whose
+  sources changed never keeps the old view. `revoke()` ends the session with one
+  `DELETE /api/browser/v1/session`.
+- `apiKey` on `createProducer`, `createConsumer` and `createAgoraReader`: the
+  single `rt_` key issued in the Console. It is refused in a browser. `token`
+  keeps accepting the older `rtk_`, `rtl_` and `rtv_` credentials.
+
+### Changed
+
+- `createAgoraReader` shares one credential renewal between its snapshot and its
+  stream: one revocation costs one `credentials()` call. No signature changed.
+
 ## 0.2.0 — 2026-09-24
 
 Primeira versao destinada a um registro publico. O codigo e o mesmo de `0.1.0`;
