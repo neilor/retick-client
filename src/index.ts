@@ -83,12 +83,12 @@ export type {
   SourceReadState,
   Withheld,
 } from './consumer.ts'
+export type { FloorLowered, ReplayCheckpoint } from './resume.ts'
 
 /**
  * The browser state reader (SDK 0.3.0, browser contract §11): the current
  * state of a project's entities, cut to exactly the sources the credential
- * names. Shares `Credentials`, `ReaderStatus` and `RevocationOutcome` with the
- * Agora reader below, which stays as Exo's bridge.
+ * names.
  */
 export { createStateReader, STATE_ROUTES, STATE_VERSION } from './state.ts'
 export type {
@@ -102,14 +102,14 @@ export type {
   StateSnapshot,
   StateView,
 } from './state.ts'
+export type { Credentials, ReaderStatus, RevocationOutcome } from './reader-session.ts'
 
+/**
+ * The Agora reader, Exo's bridge. Its wire and snapshot are Portuguese and
+ * frozen, so this package is not English end to end while it ships.
+ *
+ * @deprecated Read state with `createStateReader`. The same reader is also at
+ * `@retick/client/legacy`, where it stays after the root drops it.
+ */
 export { AGORA_ROUTES, createAgoraReader } from './agora.ts'
-export type {
-  AgoraReader,
-  AgoraReaderOptions,
-  AgoraSnapshot,
-  Credentials,
-  Freshness,
-  ReaderStatus,
-  RevocationOutcome,
-} from './agora.ts'
+export type { AgoraReader, AgoraReaderOptions, AgoraSnapshot, Freshness } from './agora.ts'

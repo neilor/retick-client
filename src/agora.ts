@@ -47,6 +47,9 @@
 import type { ReadFact } from './consumer.ts'
 import { resolveCredential } from './credential.ts'
 import { RetickConfigError } from './errors.ts'
+import type { Credentials, ReaderStatus, RevocationOutcome } from './reader-session.ts'
+
+export type { Credentials, ReaderStatus, RevocationOutcome } from './reader-session.ts'
 
 /** Version of the browser-facing contract this reader speaks. */
 export const AGORA_ROUTES = {
@@ -54,20 +57,6 @@ export const AGORA_ROUTES = {
   snapshot: '/api/navegador/v1/agora',
   stream: '/api/navegador/v1/agora/stream',
 } as const
-
-export type Credentials = {
-  token: string
-  expiresAt: string
-}
-
-export type ReaderStatus =
-  | 'idle'
-  | 'live'
-  | 'polling'
-  | 'stale'
-  | 'unauthorized'
-  | 'forbidden'
-  | 'offline'
 
 export type Freshness = {
   status: ReaderStatus
@@ -80,27 +69,6 @@ export type Freshness = {
 }
 
 /** The compact projection, opaque to this reader on purpose. */
-/**
- * What `revoke()` observed. Never an error, and never a reason to stop logging
- * out: every branch here ends with the credential forgotten locally.
- *
- * The distinction that matters to an operator is `revoked` versus
- * `unreachable`. The first means the row in `plano_sessao_navegador` carries an
- * `encerrada_em` and any other tab holding that token is already getting 401.
- * The second means nobody knows, and the session will end on its own clock.
- */
-export type RevocationOutcome =
-  /** `204`. The service ended it, and the end is persisted. */
-  | 'revoked'
-  /** `401`. The service already refuses this credential; the goal was met before we asked. */
-  | 'already-closed'
-  /** There was no credential in memory. Nothing was sent, and nothing had to be. */
-  | 'nothing-to-revoke'
-  /** The service answered, but not with an end: `403`, `5xx`, anything else. */
-  | 'refused'
-  /** Network failure, timeout or abort. The service may or may not have heard us. */
-  | 'unreachable'
-
 export type AgoraSnapshot = {
   navegador: number
   versao: string

@@ -1,238 +1,152 @@
 /**
- * The only place in this package that knows the service answers in Portuguese.
+ * The English wire format of `/api/v1/facts`, `/api/v1/contract` and
+ * `/api/read/v1`, and the
+ * small step from it to the types this package exports.
  *
- * The request side is already English — `eventId`, `sourceVersion`,
- * `occurredAt` are the contract's own field names and this client sends them
- * untouched. The response side is not, and the names there are internal to
- * Retick: `situacao`, `contiguo`, `reenvioSugerido`.
+ * The English routes already speak the names in `types.ts` and `consumer.ts`,
+ * so most of this file is a shape check plus the untranslated body for
+ * `response`. Two things are still checked here instead of trusted:
  *
- * Translating at the edge is the whole reason this file exists. If the mapping
- * lived inside the producer, every caller would end up reading one name in the
- * type and another in the debugger, and every new field would be translated in
- * whichever function happened to touch it first.
+ *  - `status`: exactly the five frozen values. A sixth means the service speaks
+ *    a newer contract, and failing loudly beats switching over an unknown case.
+ *  - missing arrays: an older or partial body without `gaps` or `sources`
+ *    reads as empty instead of throwing deep inside a producer.
  *
- * NOTHING here invents a value. Field NAMES are translated; field VALUES are
- * passed through, with one exception that is itself frozen: the five values of
- * `situacao`, which are a closed set that the contract forbids growing. Where a
- * value is an open string — `origemDoPiso` is the live example — it crosses
- * untouched, because renaming data the service may extend later would make this
- * client the thing that breaks.
+ * The legacy Portuguese publish and read routes are no longer spoken by this
+ * package. They keep serving older clients from the service side; see
+ * `docs/english-first/public-api.md` in the repository.
  */
 
 import type { ReadContract, SourceReadState } from './consumer.ts'
-import type {
-  Change,
-  Contract,
-  FactOutcome,
-  FactStatus,
-  Range,
-  ResendSuggestion,
-  SourceState,
+import {
+  FACT_STATUSES,
+  type Change,
+  type Contract,
+  type FactOutcome,
+  type FactStatus,
+  type Range,
+  type ResendSuggestion,
+  type SourceState,
 } from './types.ts'
 
 // ------------------------------------------------------------- what comes back
 
-export type SituacaoWire = 'aceito' | 'duplicado' | 'vencido' | 'pendente' | 'recusado'
+export type OutcomeWire = Omit<FactOutcome, 'status'> & { status: string }
 
-export type ResultadoWire = {
-  indice: number
-  eventId: string | null
-  situacao: SituacaoWire
-  motivo?: string
-  projetado?: boolean
+export type ResendSuggestionWire = ResendSuggestion & { message?: string }
+
+export type SourceStateWire = Omit<SourceState, 'gaps' | 'resendSuggestion'> & {
+  gaps?: Range[]
+  resendSuggestion?: ResendSuggestionWire | null
 }
 
-export type MudancaWire = {
-  colecao: string
-  id: string
-  seq: number
-  fato: string
-  em: string
-  origem: string
-  valor: unknown
+export type PublishResponseWire = {
+  project: string
+  receivedAt: string
+  received: number
+  accepted: number
+  duplicates: number
+  stale: number
+  pending: number
+  rejected: number
+  outcomes?: OutcomeWire[]
+  changes?: Change[]
+  sources?: SourceStateWire[]
 }
 
-export type FaixaWire = { de: number; ate: number }
-
-export type ReenvioWire = { desde: number; ate: number; motivo: string }
-
-export type EstadoDaFonteWire = {
-  projeto: string
-  fonte: string
-  contiguo: number
-  maior: number
-  lacunas: FaixaWire[]
-  pendentes: number
-  fatos: number
-  piso: number
-  primeiroEm: string
-  ultimoEm: string
-  duravel: boolean
-  compartilhada: boolean
-  origemDoPiso: string
-  pisoFixadoEm: string
-  avariada: boolean
-  rebaixamentos: number
-  seqRegistro: number
-  reenvioSugerido: ReenvioWire | null
+export type ContractResponseWire = Omit<Contract, 'sources' | 'response'> & {
+  sources?: SourceStateWire[]
 }
 
-export type RespostaDePublicacaoWire = {
-  projeto: string
-  recebidoEm: string
-  recebidos: number
-  aceitos: number
-  duplicados: number
-  vencidos: number
-  pendentes: number
-  recusados: number
-  resultados: ResultadoWire[]
-  mudancas: MudancaWire[]
-  fontes: EstadoDaFonteWire[]
-}
-
-export type RespostaDeContratoWire = {
-  envelope: number
-  token: { nome: string; prefixo: string; capacidades: string[]; expiraEm: string | null }
-  escopo: { projeto: string; fontes: string[] }
-  limites: { corpoBytes: number; fatosPorLote: number; payloadBytes: number }
-  obrigatorios: string[]
-  opcionais: string[]
-  definidosPeloRetick: Record<string, string>
-  durabilidade: { duravel: boolean; compartilhado: boolean }
-  fontes: EstadoDaFonteWire[]
-}
-
-/** The error body. Every refusal has `erro`; the rest depends on the case. */
-export type ErroWire = {
-  erro?: string
-  motivo?: string
-  comoAutenticar?: string
-  limiteBytes?: number
-  limiteFatos?: number
-  recebidos?: number
-  fonte?: string
-  oQueFazer?: string
+/** The error body of both APIs. `code` is stable; `message` is for people. */
+export type ErrorWire = {
+  code?: string
+  message?: string
+  reason?: string
+  howToAuthenticate?: string
+  howToResolve?: string
+  limitBytes?: number
+  limitFacts?: number
+  received?: number
+  source?: string
+  whatToDo?: string
 }
 
 // ----------------------------------------------------------------- translation
 
-/**
- * The five, and only the five.
- *
- * A `situacao` this client has never heard of would mean the service grew a
- * sixth, which `docs/CONTRATO-V1.md` section 5 classifies as an incompatible
- * change. Passing it through as an unknown string would let it reach a
- * producer's `switch` and fall out the bottom silently; `toFactStatus` throws
- * instead, so the day it happens someone reads a stack trace.
- */
-const STATUS_BY_SITUACAO: Readonly<Record<SituacaoWire, FactStatus>> = Object.freeze({
-  aceito: 'accepted',
-  duplicado: 'duplicate',
-  vencido: 'stale',
-  pendente: 'pending',
-  recusado: 'rejected',
-})
-
-export function toFactStatus(situacao: string): FactStatus {
-  const status = STATUS_BY_SITUACAO[situacao as SituacaoWire]
-  if (status === undefined) {
-    throw new Error(
-      `unknown fact status '${situacao}': this service speaks a contract newer than this client`,
-    )
+export function toFactStatus(status: string): FactStatus {
+  if (!(FACT_STATUSES as readonly string[]).includes(status)) {
+    throw new Error(`unknown fact status '${status}': this service speaks a contract newer than this client`)
   }
-  return status
+  return status as FactStatus
 }
 
-/** `offset` shifts the batch-local index back to the caller's array position. */
-export function toOutcome(r: ResultadoWire, offset: number): FactOutcome {
+/** `index` is the position in the batch; `offset` maps it back to the caller's array. */
+export function toOutcome(r: OutcomeWire, offset: number): FactOutcome {
   return {
-    index: offset + r.indice,
+    index: offset + r.index,
     eventId: r.eventId ?? null,
-    status: toFactStatus(r.situacao),
-    ...(r.motivo !== undefined ? { reason: r.motivo } : {}),
-    ...(r.projetado !== undefined ? { projected: r.projetado } : {}),
+    status: toFactStatus(r.status),
+    ...(r.reason !== undefined ? { reason: r.reason } : {}),
+    ...(r.message !== undefined ? { message: r.message } : {}),
+    ...(r.projected !== undefined ? { projected: r.projected } : {}),
   }
 }
 
-export function toChange(m: MudancaWire): Change {
+export function toChange(m: Change): Change {
+  return { collection: m.collection, id: m.id, seq: m.seq, fact: m.fact, at: m.at, origin: m.origin, value: m.value }
+}
+
+export function toSourceState(e: SourceStateWire): SourceState {
+  const r = e.resendSuggestion ?? null
   return {
-    collection: m.colecao,
-    id: m.id,
-    seq: m.seq,
-    fact: m.fato,
-    at: m.em,
-    origin: m.origem,
-    value: m.valor,
+    project: e.project,
+    source: e.source,
+    contiguous: e.contiguous,
+    highest: e.highest,
+    gaps: (e.gaps ?? []).map((g) => ({ from: g.from, to: g.to })),
+    pending: e.pending,
+    facts: e.facts,
+    floor: e.floor,
+    firstAt: e.firstAt,
+    lastAt: e.lastAt,
+    durable: e.durable,
+    shared: e.shared,
+    floorOrigin: e.floorOrigin,
+    floorSetAt: e.floorSetAt,
+    damaged: e.damaged,
+    demotions: e.demotions,
+    logSeq: e.logSeq,
+    resendSuggestion: r === null ? null : { from: r.from, to: r.to, reason: r.reason },
   }
 }
 
-export function toRange(f: FaixaWire): Range {
-  return { from: f.de, to: f.ate }
-}
-
-export function toResendSuggestion(r: ReenvioWire | null): ResendSuggestion | null {
-  return r === null ? null : { from: r.desde, to: r.ate, reason: r.motivo }
-}
-
-export function toSourceState(e: EstadoDaFonteWire): SourceState {
-  return {
-    project: e.projeto,
-    source: e.fonte,
-    contiguous: e.contiguo,
-    highest: e.maior,
-    gaps: (e.lacunas ?? []).map(toRange),
-    pending: e.pendentes,
-    facts: e.fatos,
-    floor: e.piso,
-    firstAt: e.primeiroEm,
-    lastAt: e.ultimoEm,
-    durable: e.duravel,
-    shared: e.compartilhada,
-    floorOrigin: e.origemDoPiso,
-    floorSetAt: e.pisoFixadoEm,
-    damaged: e.avariada,
-    demotions: e.rebaixamentos,
-    logSeq: e.seqRegistro,
-    resendSuggestion: toResendSuggestion(e.reenvioSugerido ?? null),
-  }
-}
-
-export function toContract(c: RespostaDeContratoWire, raw: unknown): Contract {
+export function toContract(c: ContractResponseWire, raw: unknown): Contract {
   return {
     envelope: c.envelope,
     token: {
-      name: c.token.nome,
-      prefix: c.token.prefixo,
-      capabilities: c.token.capacidades,
-      expiresAt: c.token.expiraEm,
+      name: c.token.name,
+      prefix: c.token.prefix,
+      capabilities: c.token.capabilities,
+      expiresAt: c.token.expiresAt,
     },
-    scope: { project: c.escopo.projeto, sources: c.escopo.fontes },
-    limits: {
-      bodyBytes: c.limites.corpoBytes,
-      factsPerBatch: c.limites.fatosPorLote,
-      payloadBytes: c.limites.payloadBytes,
-    },
-    required: c.obrigatorios,
-    optional: c.opcionais,
-    definedByRetick: c.definidosPeloRetick,
-    durability: { durable: c.durabilidade.duravel, shared: c.durabilidade.compartilhado },
-    sources: (c.fontes ?? []).map(toSourceState),
+    scope: { project: c.scope.project, sources: c.scope.sources },
+    limits: { bodyBytes: c.limits.bodyBytes, factsPerBatch: c.limits.factsPerBatch, payloadBytes: c.limits.payloadBytes },
+    required: c.required,
+    optional: c.optional,
+    definedByRetick: c.definedByRetick,
+    durability: { durable: c.durability.durable, shared: c.durability.shared },
+    sources: (c.sources ?? []).map(toSourceState),
     response: raw,
   }
 }
 
-// ------------------------------------------------------- a porta de leitura
+// --------------------------------------------------------------- the read API
 
-/**
- * O que a porta de leitura devolve. Formas separadas das de publicacao de
- * proposito: as duas portas versionam em ritmos diferentes, e um tipo
- * compartilhado faria uma mudanca de uma aparecer como quebra da outra.
- */
-export type FatoLegivelWire = {
-  posicao: number
+export type ReadFactWire = {
+  position: number
   eventId: string
-  fonte: string
+  source: string
   sourceVersion: number
   type: string
   entityType: string
@@ -246,86 +160,60 @@ export type FatoLegivelWire = {
   integrity?: Record<string, unknown>
 }
 
-export type EstadoDeLeituraWire = {
-  fonte: string
-  posicao: number
-  contiguo: number
-  maior: number
-  lacunas: FaixaWire[]
-  pendentes: number
-  piso: number
-  origemDoPiso: string
-  duravel: boolean
-  compartilhada: boolean
-  avariada: boolean
-  ultimoEm: string
-  frescorSegundos: number | null
+export type SourceReadStateWire = Omit<SourceReadState, 'gaps'> & { gaps?: Range[] }
+
+export type ReadPageWire = {
+  read: number
+  project: string
+  source: string
+  facts?: ReadFactWire[]
+  cursor: { from: number; next: number; total: number; hasMore: boolean }
+  withheld?: { type: number; sensitivity: number }
+  state: SourceReadStateWire | null
 }
 
-export type PaginaDeLeituraWire = {
-  leitura: number
-  projeto: string
-  fonte: string
-  fatos: FatoLegivelWire[]
-  cursor: { de: number; proxima: number; total: number; haMais: boolean }
-  omitidos: { tipo: number; classe: number }
-  estado: EstadoDeLeituraWire | null
+export type ReadContractWire = Omit<ReadContract, 'sources' | 'response'> & {
+  sources?: SourceReadStateWire[]
 }
 
-export type RespostaDeContratoDeLeituraWire = {
-  leitura: number
-  envelope: number
-  token: { nome: string; prefixo: string; capacidades: string[]; expiraEm: string | null }
-  escopo: {
-    projeto: string
-    fontes: string[]
-    tipos: Record<string, string[]>
-    procedencia: boolean
-    integridade: boolean
-    classeMaxima: string
-  }
-  limites: { fatosPorPagina: number }
-  fontes: EstadoDeLeituraWire[]
-}
-
-export function toSourceReadState(e: EstadoDeLeituraWire): SourceReadState {
+export function toSourceReadState(e: SourceReadStateWire): SourceReadState {
   return {
-    source: e.fonte,
-    position: e.posicao,
-    contiguous: e.contiguo,
-    highest: e.maior,
-    gaps: (e.lacunas ?? []).map(toRange),
-    pending: e.pendentes,
-    floor: e.piso,
-    floorOrigin: e.origemDoPiso,
-    durable: e.duravel,
-    shared: e.compartilhada,
-    damaged: e.avariada,
-    lastAt: e.ultimoEm,
-    freshnessSeconds: e.frescorSegundos,
+    source: e.source,
+    position: e.position,
+    contiguous: e.contiguous,
+    highest: e.highest,
+    gaps: (e.gaps ?? []).map((g) => ({ from: g.from, to: g.to })),
+    pending: e.pending,
+    floor: e.floor,
+    floorOrigin: e.floorOrigin,
+    durable: e.durable,
+    shared: e.shared,
+    damaged: e.damaged,
+    lastAt: e.lastAt,
+    freshnessSeconds: e.freshnessSeconds,
   }
 }
 
-export function toReadContract(c: RespostaDeContratoDeLeituraWire, raw: unknown): ReadContract {
+export function toReadContract(c: ReadContractWire, raw: unknown): ReadContract {
   return {
-    read: c.leitura,
+    read: c.read,
     envelope: c.envelope,
     token: {
-      name: c.token.nome,
-      prefix: c.token.prefixo,
-      capabilities: c.token.capacidades,
-      expiresAt: c.token.expiraEm,
+      name: c.token.name,
+      prefix: c.token.prefix,
+      capabilities: c.token.capabilities,
+      expiresAt: c.token.expiresAt,
     },
     scope: {
-      project: c.escopo.projeto,
-      sources: c.escopo.fontes,
-      types: c.escopo.tipos,
-      provenance: c.escopo.procedencia,
-      integrity: c.escopo.integridade,
-      maxSensitivity: c.escopo.classeMaxima,
+      project: c.scope.project,
+      sources: c.scope.sources,
+      types: c.scope.types,
+      provenance: c.scope.provenance,
+      integrity: c.scope.integrity,
+      maxSensitivity: c.scope.maxSensitivity,
     },
-    limits: { factsPerPage: c.limites.fatosPorPagina },
-    sources: (c.fontes ?? []).map(toSourceReadState),
+    limits: { factsPerPage: c.limits.factsPerPage },
+    sources: (c.sources ?? []).map(toSourceReadState),
     response: raw,
   }
 }

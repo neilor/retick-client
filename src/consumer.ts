@@ -23,26 +23,31 @@
  * the moment the hole closes. It is the same rule the service applies to its own
  * projection, and it has to be applied again here because the cursor cannot
  * reorder without ceasing to be a cursor.
+ *
+ * A held fact is not kept between calls. `ReplayResult.resume` points before
+ * it and remembers what was released, so the next call reads it again and
+ * releases it when its hole has closed (`resume.ts`).
  */
 
 import { resolveCredential, type CredentialOptions } from './credential.ts'
 import { RetickConfigError } from './errors.ts'
 import { request, type HttpConfig } from './http.ts'
+import { checkCheckpoint, ResumableOrder, type FloorLowered, type ReplayCheckpoint } from './resume.ts'
 import type { Fact } from './types.ts'
 import {
   toReadContract,
   toSourceReadState,
-  type PaginaDeLeituraWire,
-  type RespostaDeContratoDeLeituraWire,
+  type ReadContractWire,
+  type ReadPageWire,
 } from './wire.ts'
 
 /** Version of the read contract this client speaks. */
 export const READ_VERSION = 1
 
 export const READ_ROUTES = Object.freeze({
-  base: '/api/leitura/v1',
-  contract: '/api/leitura/v1/contrato',
-  facts: '/api/leitura/v1/fatos',
+  base: '/api/read/v1',
+  contract: '/api/read/v1/contract',
+  facts: '/api/read/v1/facts',
 })
 
 /** A fact as the reader receives it. Never the envelope, never the raw payload. */
@@ -132,7 +137,7 @@ export type ReadContract = {
 }
 
 export type ConsumerOptions = CredentialOptions & {
-  /** Base URL of the service, without the `/api/leitura/v1` suffix. */
+  /** Base URL of the service, without the `/api/read/v1` suffix. */
   url: string
   /**
    * The single Retick API key, `rt_...`, issued in the Console with the
@@ -165,6 +170,18 @@ export type PullOptions = {
 
 export type ReplayOptions = {
   source: string
+  /**
+   * Where the previous call stopped, exactly as it returned it in `resume`.
+   * Omit both this and `position` to replay from the beginning.
+   */
+  resume?: ReplayCheckpoint
+  /**
+   * The 0.2.0 way to resume, kept so existing calls compile and behave as
+   * before. It loses facts that were held behind a gap and drops versions that
+   * lowered the floor; use `resume`. Passing both is refused.
+   *
+   * @deprecated Persist `ReplayResult.resume` and pass it back as `resume`.
+   */
   position?: number
   limit?: number
   /**
@@ -172,19 +189,44 @@ export type ReplayOptions = {
    * `sourceVersion` order. Held facts are not passed until their hole closes.
    */
   onFacts: (facts: ReadFact[]) => void | Promise<void>
-  /** Stop after this many pages. Guards against an unbounded loop in a test. */
+  /**
+   * Stop after this many pages of log not read before. Pages that only read
+   * again facts a previous call held do not count.
+   */
   maxPages?: number
 }
 
 export type ReplayResult = {
-  /** Where to resume. Safe to persist and hand back as `position`. */
+  /**
+   * Where the next call should start: persist it and pass it as `resume`. It
+   * reads again any fact still held and remembers what was already released,
+   * so nothing is delivered twice and nothing is skipped.
+   */
+  resume: ReplayCheckpoint
+  /**
+   * The log position after the last fact read. Not a safe place to resume
+   * while `held > 0`, or across a gap or a lowered floor; it stays for code
+   * written against 0.2.0. Use `resume`.
+   */
   position: number
   applied: number
-  /** Facts received but still blocked by a hole. They stay in the client. */
+  /**
+   * Facts received but still blocked by a hole. They are not kept between
+   * calls: `resume.position` points before them, so the next call reads them
+   * again.
+   */
   held: number
   pages: number
   withheld: Withheld
   state: SourceReadState | null
+  /**
+   * Set when the source's floor moved down after facts above it had been
+   * released (a backfill on a durable log). The versions between the new and
+   * the old floor were then delivered after higher ones. If your projection
+   * depends on order, rebuild it: a replay with neither `resume` nor `position`
+   * delivers the whole source in `sourceVersion` order from the current floor.
+   */
+  floorLowered: FloorLowered | null
 }
 
 export type Consumer = {
@@ -195,8 +237,8 @@ export type Consumer = {
   /**
    * Pulls until caught up, releasing facts in `sourceVersion` order.
    *
-   * Deterministic: replaying the same log from the same position produces the
-   * same sequence of `onFacts` payloads, whatever the page size.
+   * Deterministic: replaying the same log from the same checkpoint produces
+   * the same sequence of `onFacts` payloads, whatever the page size.
    */
   replay(options: ReplayOptions): Promise<ReplayResult>
 }
@@ -206,7 +248,9 @@ const DEFAULTS = { timeoutMs: 30_000, retries: 3, retryBaseDelayMs: 200, retryMa
 /**
  * Restores `sourceVersion` order over facts that arrive in log order.
  *
- * Exported because determinism is a property worth testing without a server.
+ * Exported because determinism is a property worth testing without a server,
+ * and because the service's own projections use it. `replay()` does not: it
+ * needs to resume, and this buffer only knows the floor it started from.
  *
  * The floor starts at the `sourceVersion` before the first fact seen, rather
  * than at zero. A producer does not have to start at 1 — the contract says the
@@ -253,7 +297,7 @@ export class OrderedBuffer {
 export function createConsumer(options: ConsumerOptions): Consumer {
   const url = (options.url ?? '').trim()
   if (url === '') throw new RetickConfigError('url is required')
-  if (/\/api\/leitura\/v1\/?$/.test(url)) {
+  if (/\/api\/read\/v1\/?$/.test(url)) {
     throw new RetickConfigError(
       `url must not include the ${READ_ROUTES.base} suffix; the client appends it`,
     )
@@ -293,23 +337,23 @@ export function createConsumer(options: ConsumerOptions): Consumer {
   }
 
   async function pull(op: PullOptions): Promise<Page> {
-    const q = new URLSearchParams({ fonte: op.source })
-    if (op.position !== undefined) q.set('posicao', String(op.position))
-    if (op.limit !== undefined) q.set('limite', String(op.limit))
+    const q = new URLSearchParams({ source: op.source })
+    if (op.position !== undefined) q.set('position', String(op.position))
+    if (op.limit !== undefined) q.set('limit', String(op.limit))
 
-    const { body } = await request<PaginaDeLeituraWire>(
+    const { body } = await request<ReadPageWire>(
       cfg,
       'GET',
       `${READ_ROUTES.facts}?${q.toString()}`,
     )
 
     return {
-      project: body.projeto,
-      source: body.fonte,
-      facts: (body.fatos ?? []).map((f) => ({
-        position: f.posicao,
+      project: body.project,
+      source: body.source,
+      facts: (body.facts ?? []).map((f) => ({
+        position: f.position,
         eventId: f.eventId,
-        source: f.fonte,
+        source: f.source,
         sourceVersion: f.sourceVersion,
         type: f.type,
         entityType: f.entityType,
@@ -323,20 +367,20 @@ export function createConsumer(options: ConsumerOptions): Consumer {
         ...(f.integrity !== undefined ? { integrity: f.integrity } : {}),
       })),
       cursor: {
-        from: body.cursor.de,
-        next: body.cursor.proxima,
+        from: body.cursor.from,
+        next: body.cursor.next,
         total: body.cursor.total,
-        hasMore: body.cursor.haMais,
+        hasMore: body.cursor.hasMore,
       },
-      withheld: { type: body.omitidos?.tipo ?? 0, sensitivity: body.omitidos?.classe ?? 0 },
-      state: body.estado ? toSourceReadState(body.estado) : null,
+      withheld: { type: body.withheld?.type ?? 0, sensitivity: body.withheld?.sensitivity ?? 0 },
+      state: body.state ? toSourceReadState(body.state) : null,
       response: body,
     }
   }
 
   return {
     async contract(): Promise<ReadContract> {
-      const { body } = await request<RespostaDeContratoDeLeituraWire>(
+      const { body } = await request<ReadContractWire>(
         cfg,
         'GET',
         READ_ROUTES.contract,
@@ -347,13 +391,33 @@ export function createConsumer(options: ConsumerOptions): Consumer {
     pull,
 
     async replay(op: ReplayOptions): Promise<ReplayResult> {
-      const buffer = new OrderedBuffer()
+      if (op.resume !== undefined && op.position !== undefined) {
+        throw new RetickConfigError('pass resume or position to replay(), not both')
+      }
+      const from = op.resume !== undefined ? checkCheckpoint(op.resume, op.source) : null
+      // A bare position past 0 is the 0.2.0 resume. It keeps the 0.2.0 floor
+      // rule, because the facts before that position are not read again and a
+      // floor taken from the service would hold everything after them.
+      const order = new ResumableOrder(op.source, from, {
+        floorFromFirstFact: from === null && (op.position ?? 0) > 0,
+      })
       const withheld: Withheld = { type: 0, sensitivity: 0 }
-      let position = op.position ?? 0
+      let position = from ? from.position : (op.position ?? 0)
       let applied = 0
       let pages = 0
+      // Pages that only read again what a previous call held do not count
+      // against maxPages: otherwise a small maxPages behind a long hold would
+      // reread the same facts on every call and never move.
+      let newPages = 0
+      const readTo = from?.readTo ?? 0
       let state: SourceReadState | null = null
       const teto = op.maxPages ?? 10_000
+
+      const deliver = async (ready: ReadFact[]) => {
+        if (ready.length === 0) return
+        applied += ready.length
+        await op.onFacts(ready)
+      }
 
       for (;;) {
         const pagina = await pull({
@@ -361,22 +425,44 @@ export function createConsumer(options: ConsumerOptions): Consumer {
           position,
           ...(op.limit !== undefined ? { limit: op.limit } : {}),
         })
+        if (from !== null && pages === 0 && pagina.cursor.total < from.readTo) {
+          // The log is shorter than what was already read: a log that did not
+          // survive a restart, or a checkpoint from another service. Resuming
+          // would silently skip whatever now sits below the checkpoint.
+          throw new RetickConfigError(
+            `resume was read up to position ${from.readTo}, past the end of source ${op.source}'s log ` +
+              `(${pagina.cursor.total} facts); replay from the beginning without resume`,
+          )
+        }
         pages += 1
+        if (position >= readTo) newPages += 1
         position = pagina.cursor.next
         state = pagina.state
         withheld.type += pagina.withheld.type
         withheld.sensitivity += pagina.withheld.sensitivity
 
-        const prontos = buffer.offer(pagina.facts)
-        if (prontos.length > 0) {
-          applied += prontos.length
-          await op.onFacts(prontos)
-        }
+        order.observeFloor(pagina.state?.floor)
+        await deliver(order.offer(pagina.facts))
 
-        if (!pagina.cursor.hasMore || pages >= teto) break
+        if (!pagina.cursor.hasMore) {
+          // Read to the end of the log as this response saw it: whatever the
+          // service applied and this credential did not receive is settled.
+          await deliver(order.settleUnseen(pagina.state?.contiguous))
+          break
+        }
+        if (newPages >= teto) break
       }
 
-      return { position, applied, held: buffer.held, pages, withheld, state }
+      return {
+        resume: order.checkpoint(position),
+        position,
+        applied,
+        held: order.held,
+        pages,
+        withheld,
+        state,
+        floorLowered: order.floorLowered,
+      }
     },
   }
 }

@@ -16,9 +16,8 @@ import {
   toContract,
   toFactStatus,
   toOutcome,
-  toRange,
   toSourceState,
-  type EstadoDaFonteWire,
+  type SourceStateWire,
 } from '../src/wire.ts'
 import type { Fact } from '../src/types.ts'
 
@@ -38,7 +37,7 @@ test('um lote so quando tudo cabe', () => {
   const lotes = splitIntoBatches([fato(1), fato(2)], LIMITS)
   assert.equal(lotes.length, 1)
   assert.equal(lotes[0]?.offset, 0)
-  assert.deepEqual(JSON.parse(lotes[0]!.body), { fatos: [fato(1), fato(2)] })
+  assert.deepEqual(JSON.parse(lotes[0]!.body), { facts: [fato(1), fato(2)] })
 })
 
 test('o corte por contagem respeita o limite e os offsets seguem', () => {
@@ -50,11 +49,11 @@ test('o corte por contagem respeita o limite e os offsets seguem', () => {
     [0, 3, 6],
   )
   assert.deepEqual(
-    lotes.map((l) => JSON.parse(l.body).fatos.length),
+    lotes.map((l) => JSON.parse(l.body).facts.length),
     [3, 3, 1],
   )
   // Nenhum fato se perdeu e nenhum foi duplicado, na ordem original.
-  const devolta = lotes.flatMap((l) => JSON.parse(l.body).fatos)
+  const devolta = lotes.flatMap((l) => JSON.parse(l.body).facts)
   assert.deepEqual(devolta, fatos)
 })
 
@@ -70,10 +69,10 @@ test('nenhum corpo passa do limite de bytes, e o corte e o maior que cabe', () =
   // Apertado: enfiar o proximo fato em qualquer lote estouraria.
   for (const [i, l] of lotes.entries()) {
     if (i === lotes.length - 1) break
-    const proximo = JSON.stringify(fatos[JSON.parse(l.body).fatos.length + l.offset])
+    const proximo = JSON.stringify(fatos[JSON.parse(l.body).facts.length + l.offset])
     assert.ok(bytes(l.body) + 1 + bytes(proximo) > limites.bodyBytes, `lote ${i} coube mais`)
   }
-  assert.deepEqual(lotes.flatMap((l) => JSON.parse(l.body).fatos), fatos)
+  assert.deepEqual(lotes.flatMap((l) => JSON.parse(l.body).facts), fatos)
 })
 
 test('um fato que nao cabe sozinho vai sozinho, e quem recusa e o servico', () => {
@@ -92,83 +91,66 @@ test('lote vazio nao vira corpo nenhum', () => {
   assert.deepEqual(splitIntoBatches([], LIMITS), [])
 })
 
-test('as cinco situacoes, e so elas', () => {
-  assert.equal(toFactStatus('aceito'), 'accepted')
-  assert.equal(toFactStatus('duplicado'), 'duplicate')
-  assert.equal(toFactStatus('vencido'), 'stale')
-  assert.equal(toFactStatus('pendente'), 'pending')
-  assert.equal(toFactStatus('recusado'), 'rejected')
-  assert.throws(() => toFactStatus('aceito '), /unknown fact status/)
-  assert.throws(() => toFactStatus('accepted'), /unknown fact status/)
+test('the five statuses, and only them', () => {
+  for (const s of ['accepted', 'duplicate', 'stale', 'pending', 'rejected']) assert.equal(toFactStatus(s), s)
+  assert.throws(() => toFactStatus('accepted '), /unknown fact status/)
+  assert.throws(() => toFactStatus('aceito'), /unknown fact status/, 'the legacy name is not spoken by this client')
 })
 
-test('o indice do desfecho volta para a posicao no array do chamador', () => {
-  const r = toOutcome({ indice: 2, eventId: 'e9', situacao: 'pendente' }, 500)
+test('the outcome index goes back to the position in the caller array', () => {
+  const r = toOutcome({ index: 2, eventId: 'e9', status: 'pending' }, 500)
   assert.deepEqual(r, { index: 502, eventId: 'e9', status: 'pending' })
 })
 
-test('campo ausente na resposta nao vira campo presente com undefined', () => {
-  const semMotivo = toOutcome({ indice: 0, eventId: null, situacao: 'aceito' }, 0)
-  assert.deepEqual(Object.keys(semMotivo), ['index', 'eventId', 'status'])
+test('a field missing from the answer does not become a field present as undefined', () => {
+  const bare = toOutcome({ index: 0, eventId: null, status: 'accepted' }, 0)
+  assert.deepEqual(Object.keys(bare), ['index', 'eventId', 'status'])
 
-  const completo = toOutcome(
-    { indice: 0, eventId: 'e', situacao: 'aceito', motivo: 'm', projetado: false },
+  const full = toOutcome(
+    { index: 0, eventId: 'e', status: 'rejected', reason: 'payload_not_object', message: 'payload must be a JSON object', projected: false },
     0,
   )
-  assert.equal(completo.reason, 'm')
-  assert.equal(completo.projected, false)
+  assert.equal(full.reason, 'payload_not_object')
+  assert.equal(full.message, 'payload must be a JSON object')
+  assert.equal(full.projected, false)
 })
 
-test('a mudanca troca de nome sem trocar de valor', () => {
-  assert.deepEqual(
-    toChange({
-      colecao: 'despachos',
-      id: 'D-1',
-      seq: 3,
-      fato: 'dispatch.running',
-      em: '2026-09-22T00:00:00.000Z',
-      origem: 'folha',
-      valor: { estado: 'RUNNING' },
-    }),
-    {
-      collection: 'despachos',
-      id: 'D-1',
-      seq: 3,
-      fact: 'dispatch.running',
-      at: '2026-09-22T00:00:00.000Z',
-      origin: 'folha',
-      value: { estado: 'RUNNING' },
-    },
-  )
+test('a change keeps its values', () => {
+  const change = {
+    collection: 'despachos',
+    id: 'D-1',
+    seq: 3,
+    fact: 'dispatch.running',
+    at: '2026-09-22T00:00:00.000Z',
+    origin: 'folha',
+    value: { state: 'RUNNING' },
+  }
+  assert.deepEqual(toChange(change), change)
 })
 
-test('faixa e reenvio sugerido', () => {
-  assert.deepEqual(toRange({ de: 4, ate: 9 }), { from: 4, to: 9 })
-})
-
-const FONTE: EstadoDaFonteWire = {
-  projeto: 'acme',
-  fonte: 'folha',
-  contiguo: 7,
-  maior: 9,
-  lacunas: [{ de: 8, ate: 8 }],
-  pendentes: 1,
-  fatos: 8,
-  piso: 0,
-  primeiroEm: '2026-09-22T00:00:00.000Z',
-  ultimoEm: '2026-09-22T01:00:00.000Z',
-  duravel: true,
-  compartilhada: false,
-  origemDoPiso: 'primeiro_fato',
-  pisoFixadoEm: '2026-09-22T00:00:00.000Z',
-  avariada: false,
-  rebaixamentos: 2,
-  seqRegistro: 41,
-  reenvioSugerido: { desde: 8, ate: 8, motivo: 'lacuna aberta' },
+const SOURCE: SourceStateWire = {
+  project: 'acme',
+  source: 'folha',
+  contiguous: 7,
+  highest: 9,
+  gaps: [{ from: 8, to: 8 }],
+  pending: 1,
+  facts: 8,
+  floor: 0,
+  firstAt: '2026-09-22T00:00:00.000Z',
+  lastAt: '2026-09-22T01:00:00.000Z',
+  durable: true,
+  shared: false,
+  floorOrigin: 'first_fact',
+  floorSetAt: '2026-09-22T00:00:00.000Z',
+  damaged: false,
+  demotions: 2,
+  logSeq: 41,
+  resendSuggestion: { from: 8, to: 8, reason: 'gap', message: 'this range never arrived' },
 }
 
-test('o estado da fonte atravessa inteiro, campo por campo', () => {
-  assert.deepEqual(toSourceState(FONTE), {
+test('the source state crosses whole, field by field', () => {
+  assert.deepEqual(toSourceState(SOURCE), {
     project: 'acme',
     source: 'folha',
     contiguous: 7,
@@ -181,43 +163,43 @@ test('o estado da fonte atravessa inteiro, campo por campo', () => {
     lastAt: '2026-09-22T01:00:00.000Z',
     durable: true,
     shared: false,
-    floorOrigin: 'primeiro_fato',
+    floorOrigin: 'first_fact',
     floorSetAt: '2026-09-22T00:00:00.000Z',
     damaged: false,
     demotions: 2,
     logSeq: 41,
-    resendSuggestion: { from: 8, to: 8, reason: 'lacuna aberta' },
+    resendSuggestion: { from: 8, to: 8, reason: 'gap' },
   })
 })
 
-test('origemDoPiso atravessa como valor, nao como nome traduzido', () => {
-  // `docs/CONTRATO-V1.md` secao 7 mostra este campo ganhando valor novo sem
-  // quebrar ninguem. Traduzi-lo aqui faria deste cliente a peca que quebra na
-  // proxima vez.
-  assert.equal(toSourceState({ ...FONTE, origemDoPiso: 'registro' }).floorOrigin, 'registro')
-  assert.equal(toSourceState({ ...FONTE, origemDoPiso: 'algo_novo' }).floorOrigin, 'algo_novo')
+test('floorOrigin crosses as a value, so a new origin does not break this client', () => {
+  // `docs/CONTRATO-V1.md` section 7 shows this field gaining a value without
+  // breaking anyone. Narrowing it here would make this client the piece that breaks.
+  assert.equal(toSourceState({ ...SOURCE, floorOrigin: 'log' }).floorOrigin, 'log')
+  assert.equal(toSourceState({ ...SOURCE, floorOrigin: 'something_new' }).floorOrigin, 'something_new')
+  assert.deepEqual(toSourceState({ ...SOURCE, gaps: undefined }).gaps, [])
 })
 
-test('o contrato traduzido guarda o corpo original alcancavel', () => {
-  const bruto = {
+test('the translated contract keeps the original body reachable', () => {
+  const raw = {
     envelope: 1,
-    token: { nome: 'n', prefixo: 'abc', capacidades: ['fatos.publicar'], expiraEm: null },
-    escopo: { projeto: 'acme', fontes: ['folha'] },
-    limites: { corpoBytes: 10, fatosPorLote: 20, payloadBytes: 30 },
-    obrigatorios: ['eventId'],
-    opcionais: ['payload'],
-    definidosPeloRetick: { tenant: 'vem do token' },
-    durabilidade: { duravel: false, compartilhado: true },
-    fontes: [FONTE],
-    campoQueAindaNaoExiste: 'aditivo',
+    token: { name: 'n', prefix: 'abc', capabilities: ['facts:publish'], expiresAt: null },
+    scope: { project: 'acme', sources: ['folha'] },
+    limits: { bodyBytes: 10, factsPerBatch: 20, payloadBytes: 30 },
+    required: ['eventId'],
+    optional: ['payload'],
+    definedByRetick: { tenant: 'comes from the credential' },
+    durability: { durable: false, shared: true },
+    sources: [SOURCE],
+    fieldThatDoesNotExistYet: 'additive',
   }
-  const c = toContract(bruto as never, bruto)
+  const c = toContract(raw as never, raw)
 
   assert.equal(c.scope.project, 'acme')
   assert.equal(c.sources[0]?.contiguous, 7)
   assert.equal(
-    (c.response as Record<string, unknown>).campoQueAindaNaoExiste,
-    'aditivo',
-    'um campo novo continua legivel sem atualizar o cliente',
+    (c.response as Record<string, unknown>).fieldThatDoesNotExistYet,
+    'additive',
+    'a new field stays readable without updating the client',
   )
 })

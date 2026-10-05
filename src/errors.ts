@@ -67,7 +67,7 @@ export class RetickHttpError extends RetickError {
 
 /**
  * `401` credential absent, unknown or expired, and `403` token without the
- * `fatos.publicar` capability.
+ * `facts:publish` capability.
  *
  * Never retryable. The vault is read when the process starts, so a token that
  * was just revoked stays refused, and a token that was just issued stays

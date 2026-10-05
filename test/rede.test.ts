@@ -36,17 +36,17 @@ const FATO: Fact = {
 }
 
 const OK = {
-  projeto: 'acme',
-  recebidoEm: '2026-09-22T00:00:00.000Z',
-  recebidos: 1,
-  aceitos: 1,
-  duplicados: 0,
-  vencidos: 0,
-  pendentes: 0,
-  recusados: 0,
-  resultados: [{ indice: 0, eventId: 'e1', situacao: 'aceito', projetado: true }],
-  mudancas: [],
-  fontes: [],
+  project: 'acme',
+  receivedAt: '2026-09-22T00:00:00.000Z',
+  received: 1,
+  accepted: 1,
+  duplicates: 0,
+  stale: 0,
+  pending: 0,
+  rejected: 0,
+  outcomes: [{ index: 0, eventId: 'e1', status: 'accepted', projected: true }],
+  changes: [],
+  sources: [],
 }
 
 function resposta(codigo: number, corpo: unknown, cabecalhos: Record<string, string> = {}): Response {
@@ -90,9 +90,9 @@ function encenar(roteiro: Array<Response | Error>) {
 
 test('5xx e repetido, e a quarta tentativa aproveita a resposta boa', async () => {
   const cena = encenar([
-    resposta(500, { erro: 'falha ao publicar' }),
+    resposta(500, { code: 'internal_error' }),
     resposta(502, 'bad gateway'),
-    resposta(503, { erro: 'ingestao nao configurada' }),
+    resposta(503, { code: 'publish_not_configured' }),
     resposta(200, OK),
   ])
   const r = await cena.cliente().publish([FATO])
@@ -105,19 +105,19 @@ test('5xx e repetido, e a quarta tentativa aproveita a resposta boa', async () =
 })
 
 test('o recuo nao passa do teto', async () => {
-  const cena = encenar([resposta(500, { erro: 'x' })])
+  const cena = encenar([resposta(500, { code: 'x' })])
   await cena.cliente({ retries: 6 }).publish([FATO]).catch(() => {})
   assert.deepEqual(cena.dormiu, [10, 20, 40, 80, 100, 100])
 })
 
 test('Retry-After manda no lugar do recuo calculado', async () => {
-  const cena = encenar([resposta(429, { erro: 'devagar' }, { 'retry-after': '2' }), resposta(200, OK)])
+  const cena = encenar([resposta(429, { code: 'slow_down' }, { 'retry-after': '2' }), resposta(200, OK)])
   await cena.cliente().publish([FATO])
   assert.deepEqual(cena.dormiu, [2000])
 })
 
 test('429 e repetido mesmo nao existindo em v1: quem emite e o proxy da frente', async () => {
-  const cena = encenar([resposta(429, { erro: 'devagar' }), resposta(200, OK)])
+  const cena = encenar([resposta(429, { code: 'slow_down' }), resposta(200, OK)])
   const r = await cena.cliente().publish([FATO])
   assert.equal(r.accepted, 1)
   assert.equal(cena.chamadas, 2)
@@ -131,7 +131,7 @@ test('recusa respondida nao e repetida — nem uma vez', async () => {
     [405, RetickRequestError],
     [413, RetickRequestError],
   ] as const) {
-    const cena = encenar([resposta(codigo, { erro: `recusa ${codigo}` })])
+    const cena = encenar([resposta(codigo, { code: 'refused' })])
     const e = await cena.cliente().publish([FATO]).catch((err) => err)
 
     assert.ok(e instanceof classe, `${codigo} deveria ser ${classe.name}`)
@@ -144,20 +144,20 @@ test('recusa respondida nao e repetida — nem uma vez', async () => {
 
 test('413 carrega o limite que foi estourado', async () => {
   const cena = encenar([
-    resposta(413, { erro: 'lote grande demais', recebidos: 900, limiteFatos: 500 }),
+    resposta(413, { code: 'batch_too_large', received: 900, limitFacts: 500 }),
   ])
   const e = await cena.cliente().publish([FATO]).catch((err) => err)
   assert.ok(e instanceof RetickRequestError)
-  assert.equal((e.body as Record<string, unknown>).limiteFatos, 500)
+  assert.equal((e.body as Record<string, unknown>).limitFacts, 500)
 })
 
 test('503 de fonte fechada e outra coisa: para na hora e diz o que fazer', async () => {
   const cena = encenar([
     resposta(503, {
-      erro: 'ingestao indisponivel para esta fonte',
-      fonte: 'folha',
-      motivo: 'disco cheio',
-      oQueFazer: 'nao avance o cursor; reenvie a partir do ultimo fato confirmado',
+      code: 'source_closed',
+      message: 'this source stopped accepting facts after a write failure',
+      source: 'folha',
+      whatToDo: 'do not advance anything; send the same facts again once the service is back',
     }),
     resposta(200, OK),
   ])
@@ -165,14 +165,14 @@ test('503 de fonte fechada e outra coisa: para na hora e diz o que fazer', async
 
   assert.ok(e instanceof RetickSourceClosedError)
   assert.equal(e.source, 'folha')
-  assert.equal(e.reason, 'disco cheio')
+  assert.equal(e.code, 'source_closed')
   assert.equal(e.retryable, false)
-  assert.match(e.whatToDo, /nao avance o cursor/)
+  assert.match(e.whatToDo, /do not advance anything/)
   assert.equal(cena.chamadas, 1, 'a fonte fica fechada ate o processo subir; repetir e laco')
 })
 
 test('503 sem fonte continua sendo 5xx comum, e e repetido', async () => {
-  const cena = encenar([resposta(503, { erro: 'ingestao nao configurada' }), resposta(200, OK)])
+  const cena = encenar([resposta(503, { code: 'publish_not_configured' }), resposta(200, OK)])
   const r = await cena.cliente().publish([FATO])
   assert.equal(r.accepted, 1)
   assert.equal(cena.chamadas, 2)
@@ -185,7 +185,7 @@ test('falha de rede e repetida, e o que sobra e RetickNetworkError', async () =>
   assert.ok(e instanceof RetickNetworkError)
   assert.equal(e.retryable, true)
   assert.equal(cena.chamadas, 4, 'primeira mais tres repeticoes')
-  assert.equal(e.url, 'http://retick.test/api/v1/fatos')
+  assert.equal(e.url, 'http://retick.test/api/v1/facts')
   assert.ok(e.cause instanceof TypeError, 'a causa original fica alcancavel')
 })
 
@@ -249,7 +249,7 @@ test('resposta que nao e JSON nao derruba o cliente: vem inteira no erro', async
 })
 
 test('codigo fora do contrato nao e adivinhado como transitorio', async () => {
-  const cena = encenar([resposta(404, { erro: 'nao encontrado' })])
+  const cena = encenar([resposta(404, { code: 'not_found' })])
   const e = await cena.cliente().publish([FATO]).catch((err) => err)
 
   assert.equal(e.status, 404)
@@ -259,7 +259,7 @@ test('codigo fora do contrato nao e adivinhado como transitorio', async () => {
 
 test('o segredo do token nao aparece em erro nenhum, so o prefixo', async () => {
   const segredo = TOKEN.slice(17)
-  const cena = encenar([resposta(401, { erro: 'credencial recusada', motivo: 'desconhecido' })])
+  const cena = encenar([resposta(401, { code: 'credential_refused', reason: 'unknown' })])
   const e = await cena.cliente().publish([FATO]).catch((err) => err)
 
   assert.equal(e.tokenPrefix, 'rtk_0123456789ab')
@@ -267,7 +267,7 @@ test('o segredo do token nao aparece em erro nenhum, so o prefixo', async () => 
 })
 
 test('token de formato desconhecido nao e ecoado nem em pedaco', async () => {
-  const cena = encenar([resposta(401, { erro: 'credencial recusada' })])
+  const cena = encenar([resposta(401, { code: 'credential_refused' })])
   const e = await cena
     .cliente({ token: 'um-token-de-outro-formato-qualquer' })
     .publish([FATO])
@@ -286,12 +286,12 @@ test('o cliente manda Bearer, content-type e o corpo no formato do contrato', as
   await createProducer({ url: 'http://retick.test/', token: TOKEN, fetch: espiao }).publish([FATO])
 
   const { url, init } = visto as unknown as { url: string; init: RequestInit }
-  assert.equal(url, 'http://retick.test/api/v1/fatos')
+  assert.equal(url, 'http://retick.test/api/v1/facts')
   assert.equal(init.method, 'POST')
   const cab = init.headers as Record<string, string>
   assert.equal(cab.authorization, `Bearer ${TOKEN}`)
   assert.equal(cab['content-type'], 'application/json')
-  assert.deepEqual(JSON.parse(init.body as string), { fatos: [FATO] })
+  assert.deepEqual(JSON.parse(init.body as string), { facts: [FATO] })
 })
 
 test('o contrato e um GET sem corpo', async () => {
@@ -301,14 +301,14 @@ test('o contrato e um GET sem corpo', async () => {
     return Promise.resolve(
       resposta(200, {
         envelope: 1,
-        token: { nome: 'n', prefixo: 'p', capacidades: ['fatos.publicar'], expiraEm: null },
-        escopo: { projeto: 'acme', fontes: ['folha'] },
-        limites: { corpoBytes: 1, fatosPorLote: 2, payloadBytes: 3 },
-        obrigatorios: [],
-        opcionais: [],
-        definidosPeloRetick: {},
-        durabilidade: { duravel: true, compartilhado: false },
-        fontes: [],
+        token: { name: 'n', prefix: 'p', capabilities: ['facts:publish'], expiresAt: null },
+        scope: { project: 'acme', sources: ['folha'] },
+        limits: { bodyBytes: 1, factsPerBatch: 2, payloadBytes: 3 },
+        required: [],
+        optional: [],
+        definedByRetick: {},
+        durability: { durable: true, shared: false },
+        sources: [],
       }),
     )
   }) as unknown as typeof fetch
@@ -323,7 +323,7 @@ test('o contrato e um GET sem corpo', async () => {
 
 test('uma situacao que este cliente nao conhece nao passa em silencio', async () => {
   const cena = encenar([
-    resposta(200, { ...OK, resultados: [{ indice: 0, eventId: 'e1', situacao: 'engolido' }] }),
+    resposta(200, { ...OK, outcomes: [{ index: 0, eventId: 'e1', status: 'swallowed' }] }),
   ])
-  await assert.rejects(cena.cliente().publish([FATO]), /unknown fact status 'engolido'/)
+  await assert.rejects(cena.cliente().publish([FATO]), /unknown fact status 'swallowed'/)
 })

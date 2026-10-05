@@ -22,7 +22,7 @@
  *
  * `503` is the one that needs the body to classify. A service with no token
  * vault answers `503` and may outlive a retry. A source closed by a write
- * failure also answers `503`, carries `fonte`, and stays closed until the
+ * failure also answers `503`, carries `source`, and stays closed until the
  * process comes back up — retrying that is a loop that cannot end well, so it
  * throws immediately with the instruction the service sent.
  */
@@ -37,7 +37,7 @@ import {
   RetickSourceClosedError,
   RetickTimeoutError,
 } from './errors.ts'
-import type { ErroWire } from './wire.ts'
+import type { ErrorWire } from './wire.ts'
 
 export type HttpConfig = {
   /** Base URL of the service. Any path suffix is kept: `https://retick.example/retick` works. */
@@ -102,16 +102,21 @@ function classify(
   headers: Headers,
   prefix: string,
 ): Attempt<never> {
-  const erro = (body ?? {}) as ErroWire
+  const problem = (body ?? {}) as ErrorWire
   const info = {
     status,
     url,
     body,
     tokenPrefix: prefix,
-    ...(typeof erro.erro === 'string' ? { code: erro.erro } : {}),
-    ...(typeof erro.motivo === 'string' ? { reason: erro.motivo } : {}),
+    ...(typeof problem.code === 'string' ? { code: problem.code } : {}),
+    ...(typeof problem.reason === 'string' ? { reason: problem.reason } : {}),
   }
-  const said = typeof erro.erro === 'string' ? erro.erro : `HTTP ${status}`
+  const said =
+    typeof problem.message === 'string'
+      ? problem.message
+      : typeof problem.code === 'string'
+        ? problem.code
+        : `HTTP ${status}`
   const after = retryAfterMs(headers)
 
   if (status === 401 || status === 403) {
@@ -120,12 +125,12 @@ function classify(
   if (status === 400 || status === 405 || status === 413) {
     return { kind: 'fail', error: new RetickRequestError(said, info), afterMs: after }
   }
-  if (status === 503 && typeof erro.fonte === 'string') {
-    const error = new RetickSourceClosedError(`${said} (source '${erro.fonte}')`, {
+  if (status === 503 && typeof problem.source === 'string') {
+    const error = new RetickSourceClosedError(`${said} (source '${problem.source}')`, {
       ...info,
-      source: erro.fonte,
+      source: problem.source,
       whatToDo:
-        erro.oQueFazer ??
+        problem.whatToDo ??
         'do not advance the cursor; resend from the last confirmed fact when the service returns',
     })
     return { kind: 'fail', error, afterMs: after }

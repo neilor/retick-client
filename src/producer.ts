@@ -45,8 +45,8 @@ import {
   toContract,
   toOutcome,
   toSourceState,
-  type RespostaDeContratoWire,
-  type RespostaDePublicacaoWire,
+  type ContractResponseWire,
+  type PublishResponseWire,
 } from './wire.ts'
 
 export type ProducerOptions = CredentialOptions & {
@@ -110,7 +110,7 @@ const DEFAULTS = {
   retryMaxDelayMs: 5_000,
 }
 
-/** `{"fatos":[]}` — the bytes a batch costs before any fact is in it. */
+/** `{"facts":[]}`: the bytes a batch costs before any fact is in it. */
 const BATCH_OVERHEAD_BYTES = 12
 
 /** `TextEncoder` and not `Buffer`: this package assumes a `fetch`, not a Node. */
@@ -135,7 +135,7 @@ export function splitIntoBatches(facts: Fact[], limits: Limits): Batch[] {
 
   const flush = (): void => {
     if (parts.length === 0) return
-    batches.push({ offset, body: `{"fatos":[${parts.join(',')}]}` })
+    batches.push({ offset, body: `{"facts":[${parts.join(',')}]}` })
     offset += parts.length
     parts = []
     bytes = BATCH_OVERHEAD_BYTES
@@ -170,7 +170,7 @@ export function createProducer(options: ProducerOptions): Producer {
   if (url === '') throw new RetickConfigError('url is required')
   if (/\/api\/v1\/?$/.test(url)) {
     // Caught here rather than as a 404 three calls later, because the wrong
-    // base URL produces `/api/v1/api/v1/fatos` and the answer to that is a
+    // base URL produces `/api/v1/api/v1/facts` and the answer to that is a
     // proxy's 404, which says nothing about what went wrong.
     throw new RetickConfigError(
       `url must not include the ${ROUTES.base} suffix; the client appends it`,
@@ -237,17 +237,17 @@ export function createProducer(options: ProducerOptions): Producer {
       let project = ''
 
       for (const batch of batches) {
-        const { body } = await request<RespostaDePublicacaoWire>(
+        const { body } = await request<PublishResponseWire>(
           cfg,
           'POST',
           ROUTES.publish,
           batch.body,
         )
         responses.push(body)
-        project = body.projeto ?? project
-        for (const r of body.resultados ?? []) outcomes.push(toOutcome(r, batch.offset))
-        for (const m of body.mudancas ?? []) changes.push(toChange(m))
-        for (const f of body.fontes ?? []) {
+        project = body.project ?? project
+        for (const r of body.outcomes ?? []) outcomes.push(toOutcome(r, batch.offset))
+        for (const m of body.changes ?? []) changes.push(toChange(m))
+        for (const f of body.sources ?? []) {
           const state = toSourceState(f)
           sources.set(`${state.project}/${state.source}`, state)
         }
@@ -272,7 +272,7 @@ export function createProducer(options: ProducerOptions): Producer {
     },
 
     async contract(): Promise<Contract> {
-      const { body } = await request<RespostaDeContratoWire>(cfg, 'GET', ROUTES.contract)
+      const { body } = await request<ContractResponseWire>(cfg, 'GET', ROUTES.contract)
       return toContract(body, body)
     },
   }

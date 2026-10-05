@@ -65,7 +65,7 @@ export type Fact = {
   /**
    * Declared optional by the contract and REQUIRED IN PRACTICE today.
    *
-   * This is divergence 17 in `docs/DIVERGENCIAS.md`: `GET /api/v1/contrato`
+   * This is divergence 17 in `docs/DIVERGENCIAS.md`: the contract route
    * lists `payload` as optional and the route rejects a fact that arrives
    * without it. The type follows the declared contract rather than the current
    * behaviour, because the fix is one line and strictly widening, and a client
@@ -114,8 +114,10 @@ export type FactOutcome = {
   index: number
   eventId: string | null
   status: FactStatus
-  /** Why it was rejected. Only present when the service gave a reason. */
+  /** Why it was rejected, as a stable code (`payload_not_object`, `missing_field`, ...). */
   reason?: string
+  /** The same reason in a sentence, for a log line. */
+  message?: string
   /** `false` when the fact went in but its `entityType` has no reducer yet. */
   projected?: boolean
 }
@@ -218,7 +220,7 @@ export type Limits = {
   payloadBytes: number
 }
 
-/** What `GET /api/v1/contrato` says about you: your scope and your cursor. */
+/** What `GET /api/v1/contract` says about you: your scope and your cursor. */
 export type Contract = {
   envelope: number
   token: {
@@ -255,8 +257,8 @@ export const ENVELOPE_VERSION = 1
 
 export const ROUTES = Object.freeze({
   base: '/api/v1',
-  publish: '/api/v1/fatos',
-  contract: '/api/v1/contrato',
+  publish: '/api/v1/facts',
+  contract: '/api/v1/contract',
 })
 
 /** Missing any of these rejects that one fact; the rest of the batch goes on. */
@@ -302,7 +304,7 @@ export const DEDUPLICATION_KEY = Object.freeze(['source', 'tenant', 'sourceId'] 
 export const ORDER_DOMAIN = Object.freeze(['project', 'source'] as const)
 
 /** The only capability that exists today, and that is deliberate. */
-export const CAPABILITY_PUBLISH = 'fatos.publicar'
+export const CAPABILITY_PUBLISH = 'facts:publish'
 
 /**
  * The limits in force, as constants.

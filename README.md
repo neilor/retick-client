@@ -79,15 +79,23 @@ import { createConsumer } from '@retick/client'
 
 const consumer = createConsumer({ url: 'https://retick.example', token: process.env.RETICK_READ_TOKEN! })
 
-await consumer.replay({
+const r = await consumer.replay({
   source: 'billing',
+  resume: saved ?? undefined,
   onFacts: (facts) => { for (const f of facts) apply(f) },
 })
+saved = r.resume
 ```
 
 `replay` pulls until caught up and hands you facts in `sourceVersion` order. It
-returns `{ position, applied, held, withheld }`; persist `position` and hand it
-back next time.
+returns `{ resume, applied, held, withheld, floorLowered }`. Persist `resume`
+(plain JSON, one per source) and hand it back next time: it reads again the
+facts still held behind a gap and remembers which versions were delivered, so
+nothing is skipped or delivered twice. The returned `position` and the
+`position` option are the 0.2.0 resume and lose held facts; they stay for code
+written against 0.2.0. If `floorLowered` is set, a backfill delivered versions
+below ones you already applied; rebuild an order-sensitive projection with a
+replay that passes neither `resume` nor `position`.
 
 The read token starts with `rtl_`, not `rtk_`. Passing a publication token to
 `createConsumer` throws before anything leaves the machine — the separation is
@@ -324,7 +332,7 @@ deduplicated and in the cursor, which is what v1 promises.
 Whether it shows up on the Console is a second question, with a second list.
 [docs/FIRST-USE.md §5](docs/FIRST-USE.md#5-publish-your-first-fact) has both.
 
-**`payload` is declared optional and required in practice.** `GET /api/v1/contrato` lists it as
+**`payload` is declared optional and required in practice.** `GET /api/v1/contract` lists it as
 optional; the route rejects a fact that arrives without it. That is divergence 17, the fix is one
 line and strictly widening, and the type here follows the declared contract rather than today's
 behaviour so that nothing has to change the day it lands. Until then, send an object.

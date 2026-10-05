@@ -35,7 +35,7 @@
  * restarted view of the new credential's scope.
  */
 
-import type { Credentials, ReaderStatus, RevocationOutcome } from './agora.ts'
+import type { Credentials, ReaderStatus, RevocationOutcome } from './reader-session.ts'
 import { API_KEY_FORMAT, isBrowser } from './credential.ts'
 import { RetickConfigError, RetickError } from './errors.ts'
 
@@ -78,7 +78,11 @@ export type StateSnapshot = {
   cursor: string
   issuedAt: string
   restart: boolean
-  /** The credential's scope, echoed by the service. `allSources` is always `false` for a browser session. */
+  /**
+   * The credential's scope, echoed by the service. `allSources` is `true` only
+   * for a session that covers the whole project (project delegation, #71), and
+   * then `sources` is empty: read the sources from `state.sources`.
+   */
   scope: { project: string; sources: string[]; allSources: boolean }
   state: StateView
 }

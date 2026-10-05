@@ -39,8 +39,27 @@ Documentacao e exemplos. Nenhuma mudanca em `src/`, e nada disto vai no tarball.
   single `rt_` key issued in the Console. It is refused in a browser. `token`
   keeps accepting the older `rtk_`, `rtl_` and `rtv_` credentials.
 
+- `scope.allSources` on a state snapshot: a credential the app's backend
+  obtained for the whole project (an issuer registered with `allSources`) reads
+  every source, including sources created later.
+- `replay()` returns `resume`, a per-source JSON checkpoint, and accepts it
+  back as `ReplayOptions.resume`. Resuming from it no longer loses facts held
+  behind a gap, and versions below a floor lowered by a backfill are delivered
+  and reported in `floorLowered`. New types: `ReplayCheckpoint`, `FloorLowered`.
+  `position` (option and result) stays, deprecated, with its 0.2.0 behavior.
+- `@retick/client/legacy`: `createAgoraReader` and `AGORA_ROUTES`, for the
+  Portuguese Agora bridge. They also stay at the root in 0.3.0, deprecated.
+
 ### Changed
 
+- `createProducer` and `createConsumer` speak the English routes:
+  `POST /api/v1/facts`, `GET /api/v1/contract`, `GET /api/read/v1/facts` and
+  `GET /api/read/v1/contract`. They need a Retick that serves them; older
+  clients keep the Portuguese routes. Return types keep their shape; some values
+  are English now: `ROUTES` and `READ_ROUTES`, `CAPABILITY_PUBLISH`
+  (`facts:publish`), `FactOutcome.reason` (a stable code, with the sentence in
+  the new `message`), `SourceState.floorOrigin`, `maxSensitivity`
+  (`normal`, `reserved`, `private`) and the `code`/`reason` of `RetickHttpError`.
 - `createAgoraReader` shares one credential renewal between its snapshot and its
   stream: one revocation costs one `credentials()` call. No signature changed.
 
