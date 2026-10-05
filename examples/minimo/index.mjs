@@ -1,7 +1,7 @@
 // O menor programa util com o @retick/client: publica um fato e le o cursor.
 //
 //   npm install
-//   RETICK_URL=https://seu-retick RETICK_TOKEN=rtk_... npm start
+//   RETICK_URL=https://retick.dev RETICK_API_KEY=rt_... npm start
 //
 // Reenviar o mesmo eventId e seguro de proposito: a chave de deduplicacao e
 // (source, tenant, eventId), entao a segunda chamada devolve duplicates e nao
@@ -10,19 +10,19 @@
 import { createProducer } from '@retick/client'
 
 const url = process.env.RETICK_URL
-const token = process.env.RETICK_TOKEN
+const apiKey = process.env.RETICK_API_KEY // rt_..., com facts:publish
 
-if (!url || !token) {
-  console.error('defina RETICK_URL e RETICK_TOKEN')
+if (!url || !apiKey) {
+  console.error('defina RETICK_URL e RETICK_API_KEY')
   process.exit(1)
 }
 
-const producer = createProducer({ url, token })
+const producer = createProducer({ url, apiKey })
 
 const fato = {
   eventId: 'exemplo-minimo-1', // seu id, e a chave de deduplicacao
-  source: 'billing', // precisa estar no escopo do seu token
-  sourceVersion: 1, // sua numeracao, monotonica por fonte
+  source: 'billing', // dentro das fontes da sua chave
+  sourceVersion: 1, // sua numeracao, uma sequencia por fonte
   type: 'invoice.issued',
   entityType: 'invoice',
   entityId: 'INV-1',

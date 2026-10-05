@@ -6,8 +6,8 @@ route handler and one page.
 ```sh
 npm install
 
-RETICK_URL=https://retick.example \
-RETICK_TOKEN=rtk_... \
+RETICK_URL=https://retick.dev \
+RETICK_API_KEY=rt_... \
 RETICK_SOURCE=orders \
 npm run dev
 ```
@@ -22,40 +22,41 @@ curl -sS localhost:3000/api/orders \
 
 Twice. The second call answers `duplicate`, which is a success.
 
+The key needs `facts:publish`; add `log:read` to use `readOrders`.
+
 ## The one rule
 
-`rtk_` and `rtl_` are long-lived and scoped to a whole source. A browser that can
-read either one can write to your project or read all of it. So:
+An `rt_` key is long-lived and reaches the whole project, or the sources it was
+restricted to. A browser that can read it can do whatever the key can do. So:
 
-- they live in `lib/retick.ts`, which throws if it is ever loaded in a browser;
+- it lives in `lib/retick.ts`, which throws if it is ever loaded in a browser;
 - no `NEXT_PUBLIC_` prefix, which would put them in the client bundle by name;
 - `next.config.ts` lists `@retick/client` in `serverExternalPackages`, so a stray
   import from a client component fails at build time instead of shipping;
 - `app/page.tsx` is a server component. It reads the contract on the server and
   sends numbers to the browser.
 
-If you want live state in a tab, the credential for that is `rtv_`: minted per
-session by your own backend, minutes long, revocable, and read by
-`createAgoraReader`. That surface needs your identity issuer registered with the
-Retick operator first: see
-[FIRST-USE.md §8](../../docs/FIRST-USE.md#8-reading-the-agora-from-a-browser-and-the-gate-on-it).
-Until then, a server component that re-reads on navigation is the honest version,
-and it is what this example does.
+If you want live state in a tab, read it with `createStateReader`, through a
+short credential your backend obtains per session for the sources that user may
+see. That path needs your backend registered as an issuer on the project first:
+see [BROWSER.md](../../docs/BROWSER.md). Until then, a server component that
+re-reads on navigation is the simple version, and it is what this example does.
 
 ## `sourceVersion` comes from the caller
 
 `POST /api/orders` takes it in the body. Numbering belongs to your system of
-record: a database sequence, an outbox row. This client will not generate it. A client that did would be a second authority over order, and the two would
-disagree the first time a process restarted.
+record: a database sequence, an outbox row. This client will not generate it. A
+client that did would be a second authority over order, and the two would
+disagree the first time a process restarted. On a serverless platform, where
+several instances run this route at once, follow
+[PRODUCERS.md](../../docs/PRODUCERS.md).
 
 That also means this route is only as idempotent as your numbering. Same
 `eventId`, same number, any number of times: safe. Same `eventId` with a different
-number is a different fact by one measure and a duplicate by another, and Retick
-resolves it as a duplicate on `eventId`.
+number comes back `duplicate`: Retick deduplicates on `eventId`, and the second
+number is not stored.
 
 ## Checked, not assumed
 
 `npm run typecheck` compiles `lib/`, `app/` and the route handler against the
-package's own declaration files. The publishing path in `lib/retick.ts` is the
-same code the Node example runs, and that one is exercised end to end against a
-real Retick from the core repository.
+package's own declaration files.

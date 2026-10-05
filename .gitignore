@@ -7,3 +7,4 @@ sbom.cdx.json
 next-env.d.ts
 *.tsbuildinfo
 examples/*/package-lock.json
+examples/*/.retick-resume.json

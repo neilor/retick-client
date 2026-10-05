@@ -1,10 +1,10 @@
 /**
  * A server component reading the cursor.
  *
- * The credential is read on the server, the rendered page carries numbers and
- * no token, and nothing here becomes a client chunk. That is the whole shape of
- * using `rtk_`/`rtl_` from a Next app: the credential stops at the server
- * boundary, and what crosses it is already data.
+ * The key is read on the server, the rendered page carries numbers and no
+ * secret, and nothing here becomes a client chunk. That is the whole shape of
+ * using an `rt_` key from a Next app: the key stops at the server boundary, and
+ * what crosses it is already data.
  */
 
 import { cursor } from '../lib/retick'
@@ -30,7 +30,7 @@ export default async function Page() {
         <p>
           could not read the contract: <code>{failure}</code>
           <br />
-          set <code>RETICK_URL</code> and <code>RETICK_TOKEN</code>, then reload. The full list of
+          set <code>RETICK_URL</code> and <code>RETICK_API_KEY</code>, then reload. The full list of
           refusals is in <code>docs/TROUBLESHOOTING.md</code>.
         </p>
       ) : (

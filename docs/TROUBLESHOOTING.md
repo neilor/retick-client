@@ -1,224 +1,191 @@
 # Troubleshooting
 
-Grouped by what you were doing when it happened. Every refusal listed here is
-one this client or the service actually produces; nothing is invented to fill a
-row.
+Grouped by what you were doing when it happened. The codes are the ones
+`@retick/client` 0.3.0 and the service's English routes produce.
 
 Two habits worth having first:
 
-- **`RetickError` is safe to log in full.** Only the non-secret prefix
-  `rtk_<12 hex>` ever appears in a message, and a token that does not match the
-  format is not echoed at all. So print the error rather than hand-building a
-  message from your options object.
-- **read `retryable`.** Every error in this package carries it. If it is
-  `false`, repeating the call gets the same answer, and the fix is somewhere
-  else.
+- Log `RetickError` in full. It never contains an `rt_` secret. Print the
+  error rather than building a message from your options object.
+- Read `retryable`. Every error in this package carries it. If it is
+  `false`, repeating the call gets the same answer. HTTP errors also carry
+  `status`, `code` and `reason` from the service's answer.
 
 ## Configuration, before anything leaves the machine
 
-`RetickConfigError` is thrown by `createProducer`, `createConsumer` and
-`createAgoraReader` at construction, so build them where you can catch them.
+`RetickConfigError` is thrown at construction, so build clients where you can
+catch the error.
 
 | message mentions | what happened | fix |
 |---|---|---|
-| no url | `url` missing or empty | pass the base URL |
-| the route suffix | your `url` already carries `/api/v1`, `/api/leitura/v1` or `/api/navegador/v1` | pass the base URL; the client appends the route |
-| no token | `token` missing or empty | pass the credential |
-| publication token on the read surface | an `rtk_` went into `createConsumer` | issue a consumer credential; it starts with `rtl_` |
-
-The last one is the most common one in the first hour, and it is deliberate. The
-separation between publishing and reading is in the token format, so there is no
-code path where one credential does the other one's job.
+| `url is required` | `url` missing or empty | pass the base URL |
+| `must not include the … suffix` | your `url` already ends in `/api/v1` or `/api/read/v1` | pass the base URL; the client appends the route |
+| `apiKey must look like rt_<12 hex>_<secret>` | the value is not an `rt_` key, or was cut when copied | copy the secret again; it is shown once, so issue another if it is lost |
+| `apiKey is a server credential and must not run in a browser` | an `apiKey` reached code running in a page | read state in a page with `createStateReader` and `credentials` ([BROWSER.md](BROWSER.md)) |
+| `pass either apiKey or token` | both were given | pass one |
+| `this is a publication token` | an older `rtk_` went into `createConsumer` | use an `rt_` key with `log:read` |
+| `pass resume or position to replay(), not both` | both checkpoints were given | pass `resume` only |
+| `resume was read up to position …, past the end of source …'s log` | the checkpoint is from another service, or the log did not survive a restart | replay that source from the beginning, without `resume` |
 
 ## Publishing
 
-### `RetickAuthError`
+### `RetickAuthError` (`401`, `403`)
 
-| service says | meaning | what to do |
+| `code` / `reason` | meaning | what to do |
 |---|---|---|
-| `401 credencial ausente` | no `Authorization` header, or not `Bearer` | your token is empty at runtime; check how the environment reaches the process |
-| `401 credencial recusada`, `motivo: desconhecido` | the secret does not match anything | wrong credential, wrong service, or it was revoked |
-| `401 credencial recusada`, `motivo: expirado` | it matched, and its window closed | rotate. This is a separate answer on purpose: you already proved possession, so there is nothing to leak by saying which of the two it is |
-| `503 ingestao nao configurada` | the service has no publication credential store at all | not your side. Tell your operator |
+| `credential_missing` | no `Authorization: Bearer` header reached the service | your key is empty at runtime; check how the environment reaches the process |
+| `credential_refused` / `unknown` | the secret matches no key | wrong key, or wrong service |
+| `credential_refused` / `expired` | the key's expiry date passed | issue a new key |
+| `credential_refused` / `revoked` | the key was revoked | issue a new key |
+| `credential_refused` / `missing_operation` (`403`) | the key lacks `facts:publish` | add the operation, or use the right key |
 
-A revoked credential may keep working briefly. The store is reloaded per request
-in some deployments and at boot in others, so if a revocation has not taken hold,
-that is why.
+### `RetickRequestError` (`400`, `405`, `413`)
 
-### `RetickRequestError`
+Not retryable: repeating sends the same body.
 
-`400`, `405` and `413`. Not retryable, because repeating sends the same body.
-
-| what | why |
+| `code` | why |
 |---|---|
-| `400 corpo malformado` | not JSON, or not `{ fatos: [...] }` / a bare array |
-| `400 lote vazio` | you called `publish([])` |
-| `413 corpo grande demais` | over 1 048 576 bytes. The body is cut at the byte that overflows, so nothing is applied |
-| `413 lote grande demais` | over 500 facts. `publish()` splits for you, so this means you overrode `limits` upward |
-| `405` | you called `GET /api/v1/fatos`. The publication route is write-only |
+| `invalid_json` | the body is not JSON |
+| `invalid_body` | not `{ "facts": [...] }` |
+| `empty_batch` | you called `publish([])` |
+| `body_too_large` | over the body limit. Nothing was applied |
+| `batch_too_large` | too many facts in one request. `publish()` splits for you, so this means `limits` was overridden upward |
+
+`contract().limits` reports the limits the service enforces.
 
 ### A fact came back `rejected`
 
-This does not throw. Read `outcomes[i].reason`.
+This does not throw. Read `outcomes[i].reason` (a stable code) and
+`outcomes[i].message`.
 
-| reason says | what happened |
+| `reason` | what happened |
 |---|---|
-| `campo 'tenant' nao e aceito` (also `project`, `projeto`) | you tried to declare the project in the body. It comes from the credential, and only from there |
-| `fonte '…' fora do escopo do token` | that `source` is not in this credential's scope. The message lists the ones that are |
-| `campo obrigatorio ausente ou vazio: source` | and the same for the other five required fields |
-| `payload com N bytes excede o limite` | one fact over 65 536 payload bytes. That fact is refused and the rest of the batch goes in |
-| `fato precisa ser objeto` | an array or a scalar in the `fatos` list |
+| `forbidden_field` | the fact names `tenant`, `project` or `projeto`. The project comes from the key |
+| `source_out_of_scope` | the key is restricted to sources and this is not one of them |
+| `missing_field` | one of `eventId`, `source`, `sourceVersion`, `type`, `entityType`, `occurredAt` is missing or empty |
+| `payload_not_object` | `payload` is missing, `null`, an array or a scalar. Send an object, even `{}` |
+| `payload_too_large` | that one fact's payload is over the limit. The rest of the batch goes in |
+| `invalid_timestamp`, `invalid_source_version` | the field is there and unreadable |
 
-**A fact with no `payload` is refused**, even though `GET /api/v1/contrato` lists
-`payload` as optional. That is a known divergence; the fix is widening, so code
-written against the declared contract keeps working. Send an object.
+The service may add codes; these are the ones a first producer meets.
 
 ### It said `pending`, and nothing appeared
 
 The fact arrived ahead of a missing `sourceVersion`. Nothing is applied past a
-hole, and it waits, held, until the missing one arrives. Then both go in, in
-order.
+hole; it waits until the missing version arrives, and then both go in, in order.
 
-Check `sources[]` in the response: `gaps` names the ranges, `pending` counts what
-is held, and `resendSuggestion` names a range the service knows it is missing.
-Deciding to resend is yours; Retick never fetches.
+`contract().sources` names the ranges in `gaps`, and `resendSuggestion` names a
+range the service knows it is missing. Resending is your side's job; Retick
+never fetches. [PRODUCERS.md](PRODUCERS.md) covers what to do when the answer to
+an earlier publish was lost.
 
-### It said `accepted`, but the Console shows nothing
+### It said `stale`
 
-Read `projected` in the outcome.
-
-The Agora projection reduces six `entityType`s (`dispatch`, `machine`, `session`,
-`block`, `approval`, `state`), and their reducers read keys in English inherited
-from the first producer: `code`, `title`, and `state`, `to` or `initialState`.
-Anything else is stored, ordered, deduplicated and counted in the cursor, and
-rendered nowhere.
-
-| what you published | `projected` | on the Console |
-|---|---|---|
-| one of the six, with those keys | `true` | appears, populated |
-| one of the six, with your own keys | `true` | appears, every field `null` |
-| an `entityType` of your own | `false` | nothing |
-
-The middle row is the one that costs time. `projected: true` says a reducer
-exists. It says nothing about whether the reducer understood you.
-
-### `RetickSourceClosedError`
-
-`503` naming a closed source. What was applied in memory did not reach storage,
-so the **whole** batch fell, including the part that had passed.
-
-**Do not advance your cursor.** Resend from the last confirmed fact once the
-service is back. `whatToDo` carries the service's own instruction. Half-confirmed
-would be worse than nothing: you would advance over a fact that exists nowhere.
+The version is at or below the source's intact point, or below its floor. The
+fact was not stored. If it is the same fact as the one already there, nothing is
+lost. If it is a different fact, two writers picked the same version:
+[PRODUCERS.md](PRODUCERS.md#allocating-sourceversion-with-several-instances).
 
 ### `RetickServerError`, `RetickNetworkError`, `RetickTimeoutError`
 
-All three are retryable, and this client already retried: three extra attempts by
-default, exponential backoff with full jitter, honouring `Retry-After`. If you
-still see one, the service was down for longer than your retry budget.
+Retried by the client already (`retries`, default 3). When one still reaches you,
+the facts may or may not be stored. Send the same facts again later, with the
+same `eventId` and `sourceVersion`: `duplicate` means the lost request stored
+them. Never give their versions to other facts.
 
-Timeouts against a service you can reach at all are usually a wrong base URL:
-`http` where the service wants `https`, or a host that resolves and silently
-drops. `curl -sS -o /dev/null -w '%{http_code}\n' <url>/api/v1/contrato -H
-"Authorization: Bearer $RETICK_TOKEN"` separates the two in one line. A `401`
-means you reached Retick and the credential is wrong; no answer means you did not
-reach it.
+### `RetickSourceClosedError`
 
-`429` is handled and v1 never emits it: there is a size limit and no rate limit.
-Seeing one means a proxy in front of the service produced it.
+`503` naming a closed source: what the service applied in memory did not reach
+storage, so the whole batch fell, including what had passed. Do not advance
+anything on your side. Resend from the last confirmed fact; `whatToDo` carries
+the service's own instruction.
 
 ## Reading your own project
 
-### `applied: 0`, and `withheld.type` counts every fact
+### `credential_refused` / `missing_operation`
 
-Your credential's type map is empty, so nothing passed. `contract().scope.types`
-shows it.
+The key lacks `log:read`. Add it in **Access → API keys**, or issue a key that
+has it.
 
-A consumer credential issued from the Console has an empty map today. The Console
-has no screen for choosing which payload keys per `entityType` a credential may
-see, and defaulting to a wide cut would decide that for you. The
-cut is an allow-list: a type outside the map has no intersection, and the fact is
-taken out of the page.
+### `applied` is low, and `withheld` counts the rest
 
-A credential with an explicit map comes from
-`POST /api/plano/v1/projetos/:id/credenciais`, called with an `rta_` key that
-carries `credencial.emitir`:
+The key does not let those facts through. `withheld.type` counts facts of types
+outside the key's type restriction; leave **Types a read returns** empty to read
+every type. `withheld.sensitivity` counts facts above the key's sensitivity
+ceiling.
 
-```jsonc
-{
-  "tipo": "consumidor",
-  "nome": "orders reader",
-  "fontes": ["orders"],
-  "tipos": { "order": ["number", "totalCents", "currency"] }
-}
-```
-
-`rta_` keys are not issued from the Console either, so today this is a request to
-whoever operates your Retick. Until it exists, the Console's own Estado Live
-panel is the way to see your project's state.
+The older `rtl_` credentials issued from the Console have an empty type map and
+read nothing. Use an `rt_` key with `log:read`.
 
 ### The facts came back out of order
 
-They did not. The read route serves the log in **arrival** order, which is what
-makes position a usable cursor, and `sourceVersion` order is restored on this
-side. Use `replay`, which does it; `pull` hands you raw pages on purpose.
+The read route serves the log in arrival order, and `sourceVersion` order is
+restored on this side. `replay` does it; `pull` hands you raw pages on purpose.
 
 ### `held` is not zero and stays that way
 
 `replay` is holding facts behind a hole that never closed. Check the producer:
-either a `sourceVersion` was skipped, or a fact was refused and never resent.
+a `sourceVersion` was skipped, or a fact was refused and never resent.
 
-### I resumed and got the same facts again
+### I resumed and lost or repeated facts
 
-You resumed by `sourceVersion` instead of `position`. Persist `result.position`
-and pass it back as `position`.
+Resume from `result.resume`, not from `result.position` and not from a
+`sourceVersion`. [MANY-SOURCES.md](MANY-SOURCES.md#one-source-replay-with-resume).
 
 ## The Console
 
 | what you see | what it is |
 |---|---|
-| *this account was not invited* | access is closed. Every refusal reason shows this same text; the specific one stays in the audit trail |
-| back at the sign-in page after signing in | the session was refused. A session is a row in the database, so a role change, a deactivation or a sign-out in another tab ends it in the next request |
-| another tab stopped working after you signed out | same reason, and it is the point of not using a signed cookie |
+| *This account was not invited.* | access is by invitation. Ask whoever operates your Retick |
 | the issued secret is gone after a reload | it appears once and no route returns it. Issue another and revoke the old one |
-| the *issue credential* button is disabled | your role is `viewer`. Issuing is `developer` and up |
-| the Estado Live panel says nothing is there | either no fact has been published to that project, or none of them used a vocabulary the projection reduces. See *It said `accepted`, but the Console shows nothing* |
+| the Studio says *Nothing published yet* | no fact reached this project. Check the key's project with `contract().scope.project` |
+| the key form refuses to issue | no operation is checked. A key that allows nothing is refused |
 
-## Reading the Agora from a browser
+## Browser
 
-This surface needs the operator to have registered your identity issuer for the
-project. Failures divide cleanly into that and the rest.
+### Exchanging the assertion (`POST /api/browser/v1/session`)
 
-| status / state | meaning | retried |
+| status | `code` / `reason` | meaning |
 |---|---|---|
-| `403` with `emissor_nao_cadastrado` | your issuer is not registered. The answer will not change by asking again | no, and the reader stops |
-| `403` with `audiencia` | the assertion was issued for a different audience. A token minted for somewhere else does not become a Retick credential | no |
-| `400` with `escopo_vazio` | the intersection of what your issuer asked for and the registered ceiling is empty | no |
-| `400` with `assercao_reusada` | the assertion was already exchanged. They are single-use, and they live sixty seconds | no, mint a new one |
-| `401` | the credential is dead. The reader asks `credentials()` once, and a second `401` becomes `unauthorized` and stops | once |
-| `429`, `5xx` | backs off with jitter | yes |
-| status `offline` | no contact. The last snapshot is kept and `ageSeconds` grows, so you can tell stale from current | yes |
+| `403` | `origin_refused` | the page's origin is not registered for the project, or no `Origin` was sent |
+| `403` | `assertion_refused` / `issuer_not_registered` | `retick.project` is not the tenant key, or the issuer is not registered for it |
+| `401` | `assertion_refused` / `audience` | `aud` is not the audience registered with the issuer, exactly |
+| `401` | `assertion_refused` / `signature`, `issuer` | the JWT was not signed by the key behind the registered JWKS, or `iss` differs |
+| `401` | `assertion_refused` / `expired`, `lifetime_too_long` | the assertion is past `exp`, or lives more than 300 seconds |
+| `401` | `assertion_refused` / `replayed` | this `jti` was already exchanged. Sign a new assertion per exchange |
+| `400` | `exchange_refused` / `sources_required` | no `sources` and no `allSources` |
+| `400` | `exchange_refused` / `ambiguous_scope` | both `sources` and `allSources` |
+| `400` | `exchange_refused` / `source_outside_ceiling` | a source is outside the issuer's list; `sources` names it |
+| `400` | `exchange_refused` / `all_sources_not_granted` | `allSources` from an issuer registered with an exact list |
+| `400` | `exchange_refused` / `too_many_sources` | more than 32 sources |
 
-### CORS
+How to register an issuer and choose sources: [BROWSER.md](BROWSER.md).
 
-The browser port checks `Origin` before anything else, and it refuses an origin
-it does not know. The refusals, in the order they are checked: `ausente`,
-`malformada`, `insegura` (not `https`), `local_fora_de_dev` (a `localhost` origin
-against a production deployment), `nao_cadastrada`.
+### Reading state
 
-A refusal here shows up in the browser as a CORS error with no body, because that
-is what a browser does with a response that lacks the header. Registering an
-origin is on the operator's side.
+`createStateReader` reports problems through `freshness().reason` rather than by
+throwing:
 
-The publication and read ports have no CORS headers at all, and that is not an
-oversight: they serve raw facts to servers. Calling them from a tab fails, and
-moving a long-lived `rtk_` or `rtl_` into a browser to make it work hands a
-visitor your write or read access.
+| `reason` | meaning | the reader |
+|---|---|---|
+| `forbidden` | `403`: the origin is not registered, or the credential lacks the `state:read` capability | stops |
+| `session_closed` | a renewed credential was refused again | stops |
+| `rate_limited` | `429`. The state routes limit requests per credential and per project | backs off for at least `retry-after` |
+| `service_unavailable` | `5xx` | backs off with jitter |
+| `network`, `connection_lost` | no contact; the last view is kept and `ageSeconds` grows | retries |
+| `no_credential` | your `credentials()` threw, or returned an `rt_` key in a browser | shows `unauthorized`; `refresh()` or `snapshot()` asks `credentials()` again |
+
+`StateReaderReason` in the package lists every value.
+
+A refused origin shows up in the browser's console as a CORS error with no body,
+because the browser hides a response that lacks the CORS header. The publish and
+read routes send no CORS headers at all: they serve servers, and calling them
+from a page fails on purpose.
 
 ## Still stuck
 
-- the full client surface, option by option: [../README.md](../README.md)
+- the client's surface, option by option: [../README.md](../README.md)
 - the journey with the reasons attached: [FIRST-USE.md](FIRST-USE.md)
 - a bug in this package: https://github.com/neilor/retick-client/issues
-- anything about a specific Retick (access, origins, `rta_` keys, whether a
-  deployment is durable) is with whoever operates it. This package does not know.
+- anything about a specific Retick (access, registered origins, whether a
+  deployment is durable) is with whoever operates it.
