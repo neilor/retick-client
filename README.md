@@ -17,6 +17,9 @@ attached, including the two places where the product stops short today, and
 [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) is what to do when something
 refuses you.
 
+Those guides and the examples were written for 0.2.0, which they pin. From 0.3.0 the producer
+and the consumer speak the English routes and refusal codes listed in `CHANGELOG.md`.
+
 The rest of this file is the client's own surface, option by option.
 
 ## Install
@@ -25,7 +28,7 @@ The rest of this file is the client's own surface, option by option.
 npm install @retick/client
 ```
 
-`0.2.0` is the first release on npm, published from GitHub Actions on the `v0.2.0` tag.
+Every version on npm is published from GitHub Actions on its `v*` tag; `0.2.0` was the first.
 Every tarball carries a signed provenance attestation, so `npm audit signatures` verifies which
 repository, commit and workflow built it. `CHANGELOG.md` is the record of what changed.
 
@@ -139,8 +142,14 @@ What your backend does for `credentials()` (browser contract §3):
 2. Signs an ES256 JWT, at most 300 seconds long, with the issuer and audience
    registered for the project, and
    `retick: { project, capabilities: ["state:read"], sources: [...] }`.
-   `sources` must be the exact list for this user: missing or `[]` is refused,
-   and one source outside the issuer's ceiling refuses the whole request.
+   `project` is the project's tenant key (`prj_…`, shown on the project's
+   overview in the Console), not the id in the Console's address. `aud` is the
+   audience registered with the issuer, exactly.
+   The scope is one of two, said explicitly. `sources` is the exact list for
+   this user, at most 32: missing or `[]` is refused, and one source outside the
+   issuer's ceiling refuses the whole request. `allSources: true`, instead of
+   `sources`, reads every source of the project, including sources created
+   later; only an issuer registered with all sources may grant it.
 3. `POST /api/browser/v1/session` with `{ "assertion": "<jwt>" }` and the page's
    `Origin`, and returns `token` and `expiresAt` from the `201`.
 
@@ -358,7 +367,7 @@ anyway: `@retick/cli` and whatever comes after it arrive without a second round 
 Semantic versioning.
 
 **While the version starts with `0.`, a minor bump may break you.** That is the semver rule and
-most people read past it, so: pin with `~0.2.0` if a break would cost you something.
+most people read past it, so: pin with `~0.3.0` if a break would cost you something.
 
 `1.0.0` is one specific promise. `createProducer`, `createConsumer` and `createAgoraReader` stop
 changing shape without a major. The publication surface has held still since the contract was

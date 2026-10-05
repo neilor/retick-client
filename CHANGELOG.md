@@ -4,27 +4,9 @@ O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e o
 versionamento segue [SemVer](https://semver.org/lang/pt-BR/).
 
 Enquanto a versao comecar com `0.`, **um bump de minor pode quebrar**. A regra
-de `1.0.0` esta no README, em "Versionamento".
+de `1.0.0` esta no README, em "Versioning".
 
-## Nao lancado
-
-Documentacao e exemplos. Nenhuma mudanca em `src/`, e nada disto vai no tarball.
-
-### Adicionado
-
-- `docs/QUICKSTART.md`: do zero ate um fato visivel na Console, em seis passos.
-- `docs/FIRST-USE.md`: a mesma jornada com as razoes, a diferenca entre chave de
-  projeto e credencial, e os dois pontos onde o produto para hoje — o mapa de
-  tipos vazio de uma credencial de leitura emitida pela Console, e o emissor que
-  precisa estar cadastrado antes de `createAgoraReader` funcionar.
-- `docs/TROUBLESHOOTING.md`: as recusas reais de cada superficie, agrupadas pelo
-  que voce estava fazendo quando aconteceram.
-- `examples/primeiro-fato/`: publicar e ler de volta, em dois arquivos. O
-  repositorio do nucleo roda estes dois, sem alterar uma linha, contra uma pilha
-  Retick de verdade.
-- `examples/nextjs/`: o mesmo de um app Next, com a credencial presa ao servidor.
-
-## 0.3.0 — candidate, not released
+## 0.3.0
 
 ### Added
 
@@ -62,6 +44,19 @@ Documentacao e exemplos. Nenhuma mudanca em `src/`, e nada disto vai no tarball.
   (`normal`, `reserved`, `private`) and the `code`/`reason` of `RetickHttpError`.
 - `createAgoraReader` shares one credential renewal between its snapshot and its
   stream: one revocation costs one `credentials()` call. No signature changed.
+
+### Documentation
+
+In the repository only; none of it is in the tarball.
+
+- `docs/QUICKSTART.md`, `docs/FIRST-USE.md` and `docs/TROUBLESHOOTING.md`: the
+  first-use journey, the difference between a project key and a credential, and
+  the refusals of each surface.
+- `examples/primeiro-fato/` and `examples/nextjs/`: publish and read back, plain
+  and from a Next app.
+
+These guides and examples were written against 0.2.0 and pin `^0.2.0`. They
+describe its Portuguese routes and refusal texts, and stay accurate for it.
 
 ## 0.2.0 — 2026-09-24
 
