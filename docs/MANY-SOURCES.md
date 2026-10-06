@@ -2,9 +2,9 @@
 
 A source is one sequence of facts with its own numbering: typically one per
 user, per room, per device or per job. An app with many users ends up with many
-sources. This page covers reading them back with `@retick/client` 0.3.0, what
-holds and what does not hold across sources, and the service's batch read route,
-which 0.3.0 has no method for.
+sources. This page covers reading them back with `@retick/client` 0.4.0, one
+source at a time with `replay` or many per request with `replaySources`, what
+holds and what does not hold across sources, and the service's batch read route.
 
 ## One source: `replay` with `resume`
 
@@ -51,12 +51,73 @@ The key needs the `log:read` operation. See [FIRST-USE.md](FIRST-USE.md#7-read-y
   source, make the later fact name the earlier one in its payload (its `source`
   and `eventId`), or make the projection independent of that order.
 
-## Many sources in one request: `POST /api/read/v1/batch`
+## Many sources per request: `replaySources`
 
-Replaying sources one by one costs at least one request per source. For an app
-that reads hundreds of sources, the service answers a batch route. **0.3.0 has
-no method for it**: a server calls it over HTTP, with the same `rt_` key
-(`log:read`) that `createConsumer` uses.
+Replaying sources one by one costs at least one request per source.
+`replaySources` reads them over the service's batch read route, up to 100
+sources per request, with the same key, timeouts and retries as `replay`.
+
+```ts
+import { createConsumer, type ReplayCheckpoint } from '@retick/client'
+
+const consumer = createConsumer({ url: 'https://retick.dev', apiKey: process.env.RETICK_API_KEY! })
+
+const sources = ['room-01', 'room-02', 'user-a']        // your backend chooses
+const saved: Record<string, ReplayCheckpoint> = await loadCheckpoints(sources)
+
+const result = await consumer.replaySources({
+  sources,
+  resume: saved,
+  onFacts: (facts, source) => {
+    for (const f of facts) apply(source, f)
+  },
+})
+await saveCheckpoints(result.resume)                   // one ReplayCheckpoint per source
+```
+
+- `sources` is required, each named once. The method never lists sources on
+  its own. To read every source the key sees, pass
+  `(await consumer.contract()).sources`.
+- `resume` takes one `ReplayCheckpoint` per source, the same object `replay`
+  returns. A checkpoint saved by `replay({ source })` works here, and the
+  reverse also works. A listed source without a checkpoint starts from the
+  beginning. A checkpoint stored under another source's name is refused.
+- `onFacts(facts, source)` gets one source's facts at a time, in that source's
+  `sourceVersion` order. The first argument is what `replay` passes. Calls for
+  different sources come in the order the service answered, which is not an
+  order between sources.
+- The result has `resume` (one checkpoint per listed source), `sources` (per
+  source: `applied`, `held`, `withheld`, `state`, `floorLowered`), and the
+  totals `applied`, `held`, `requests` and `deferred`. `caughtUp` is `false`
+  only when `maxRequests` stopped the call.
+- `maxRequests` works like `maxPages` in `replay`: a function with a time
+  budget stops early and resumes from the checkpoints. Requests that only read
+  again facts held by an earlier call do not count.
+- `limit` caps facts per source per request, as in `replay`. The service caps
+  it too.
+
+What the client leaves to the service: it does not split the response budget or
+cut pages by size. It sends the sources the service deferred first in the next
+request, takes `maxSources` from the response or from a `too_many` refusal, and
+throws if an answer names a source or position it did not ask for, or advances
+no source.
+
+What stays as in `replay`:
+
+- A refusal throws. A source outside the key's exact list refuses the whole
+  request before any page is read. Facts already passed to `onFacts` in that
+  call are passed again by the next call, so key every apply by
+  `(source, sourceVersion)`.
+- With more than 100 sources, the call takes several requests, and a refused
+  source can sit in a later one.
+- A service without the batch route answers `404`. The error says to use
+  `replay`; the client does not fall back on its own.
+
+## The batch route over HTTP: `POST /api/read/v1/batch`
+
+`replaySources` is built on this route. Code that does not use this client can
+call it directly, with the same `rt_` key (`log:read`) that `createConsumer`
+uses.
 
 ```http
 POST /api/read/v1/batch
@@ -79,8 +140,8 @@ Content-Type: application/json
   every source in the request. One source outside it refuses the whole request
   before anything is read.
 
-The pages are raw, in log order, like `consumer.pull()`. 0.3.0 does not apply
-them for you. Per source, your code does what `replay` does:
+The pages are raw, in log order, like `consumer.pull()`. Calling the route
+yourself means doing per source what `replay` and `replaySources` do:
 
 - apply facts in `sourceVersion` order, starting above `state.floor`;
 - hold a fact whose version is above the last applied one plus one, until the
@@ -94,10 +155,6 @@ A fact the key may not see is taken out of the page (`withheld` counts it, by
 reason) but keeps its version. Once a source is read to its end, treat versions
 up to `state.contiguous` as settled, or a withheld version looks like a gap
 forever.
-
-If that is more logic than your app needs, `consumer.replay` per source is the
-simpler path, and the batch route is an optimization to adopt when the number of
-sources makes per-source calls too slow.
 
 ## What the service does not do
 

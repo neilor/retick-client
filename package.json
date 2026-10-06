@@ -1,6 +1,6 @@
 {
   "name": "@retick/client",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "license": "Apache-2.0",
   "type": "module",
   "description": "Client for Retick: publish facts, read your own scope by cursor, and read the current state of your entities from a browser, cut to the sources each user may see.",

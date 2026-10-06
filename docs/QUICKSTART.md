@@ -1,6 +1,6 @@
 # Quickstart
 
-From nothing to a fact you can see in the Console, with `@retick/client` 0.3.0.
+From nothing to a fact you can see in the Console, with `@retick/client` 0.4.0.
 Five steps, one file.
 
 You need an account on a Retick Console. Access is by invitation, so ask

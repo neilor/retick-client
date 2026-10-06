@@ -6,7 +6,7 @@ versionamento segue [SemVer](https://semver.org/lang/pt-BR/).
 Enquanto a versao comecar com `0.`, **um bump de minor pode quebrar**. A regra
 de `1.0.0` esta no README, em "Versioning".
 
-## Unreleased
+## 0.4.0
 
 ### Added
 
