@@ -36,12 +36,11 @@ export async function POST(request: Request) {
     // retry as a problem.
     return Response.json(result, { status: 200 })
   } catch (e) {
-    // The error is safe to log in full: only the non-secret prefix of a
-    // credential ever appears in one.
+    // The error is safe to log in full: it never carries the key.
     console.error(e)
 
     if (e instanceof RetickAuthError) {
-      return Response.json({ error: 'retick refused this credential' }, { status: 500 })
+      return Response.json({ error: 'retick refused this key' }, { status: 500 })
     }
     if (e instanceof RetickError) {
       return Response.json({ error: e.name, retryable: e.retryable }, { status: e.retryable ? 503 : 502 })

@@ -1,24 +1,30 @@
 # @retick/client
 
-A TypeScript client for the Retick v1 publication gate. It publishes facts, reads back your own
-scope and cursor, and handles batching, retries, timeouts and errors so a producer does not have
-to write that code again.
+A TypeScript client for Retick. It publishes facts, reads your own facts back by source, and
+reads the current state of your entities from a browser, cut to the sources each user may see.
+It handles batching, retries, timeouts and errors so a producer does not have to write that code
+again.
 
-Zero dependencies. It speaks HTTP to a frozen contract, and carries no core and no Firebase.
+Zero dependencies. It speaks HTTP, and carries no core and no Firebase.
 
 Apache-2.0.
 
 ## Start here
 
-If you have a Retick and have never used it, [docs/QUICKSTART.md](docs/QUICKSTART.md)
-goes from nothing to a fact visible in the Console in six steps.
-[docs/FIRST-USE.md](docs/FIRST-USE.md) is the same journey with the reasons
-attached, including the two places where the product stops short today, and
-[docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) is what to do when something
-refuses you.
+The guides describe 0.3.0, the current version on npm.
 
-Those guides and the examples were written for 0.2.0, which they pin. From 0.3.0 the producer
-and the consumer speak the English routes and refusal codes listed in `CHANGELOG.md`.
+| guide | for |
+|---|---|
+| [docs/QUICKSTART.md](docs/QUICKSTART.md) | from nothing to a fact visible in the Console, in five steps |
+| [docs/FIRST-USE.md](docs/FIRST-USE.md) | the same journey with the reasons: tenant key, sources, the `rt_` key, publishing, reading back |
+| [docs/PRODUCERS.md](docs/PRODUCERS.md) | `sourceVersion`, lost answers and timeouts, serverless functions and several instances |
+| [docs/MANY-SOURCES.md](docs/MANY-SOURCES.md) | reading many sources, order across them, the service's batch read route |
+| [docs/BROWSER.md](docs/BROWSER.md) | `createStateReader`: registering your backend, choosing each user's sources, the page |
+| [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | what to do when something refuses you |
+
+Coming from 0.2.0: `CHANGELOG.md` lists what changed, and
+[docs/BROWSER.md](docs/BROWSER.md#6-from-createagorareader) maps the Agora reader to the state
+reader.
 
 The rest of this file is the client's own surface, option by option.
 
@@ -46,13 +52,13 @@ import { createProducer } from '@retick/client'
 import type { Fact } from '@retick/client'
 
 const producer = createProducer({
-  url: 'https://retick.example',   // without the /api/v1 suffix
-  token: process.env.RETICK_TOKEN!,
+  url: 'https://retick.example',       // without the /api/v1 suffix
+  apiKey: process.env.RETICK_API_KEY!, // rt_…, with facts:publish
 })
 
 const fact: Fact = {
   eventId: 'invoice-2026-0001',    // your id; the deduplication key
-  source: 'billing',               // must be in your token's scope
+  source: 'billing',               // within your key's sources
   sourceVersion: 1,                // your numbering, monotonic per source
   type: 'invoice.issued',
   entityType: 'invoice',
@@ -74,13 +80,13 @@ credential kept on the server side of the boundary.
 
 ## Reading back
 
-The publication gate is write-only. Reading your own project is a separate
-surface, with a separate credential:
+The publication route is write-only. Reading your own project is a separate
+route, and a separate operation on the key (`log:read`):
 
 ```ts
 import { createConsumer } from '@retick/client'
 
-const consumer = createConsumer({ url: 'https://retick.example', token: process.env.RETICK_READ_TOKEN! })
+const consumer = createConsumer({ url: 'https://retick.example', apiKey: process.env.RETICK_API_KEY! })
 
 const r = await consumer.replay({
   source: 'billing',
@@ -100,10 +106,10 @@ written against 0.2.0. If `floorLowered` is set, a backfill delivered versions
 below ones you already applied; rebuild an order-sensitive projection with a
 replay that passes neither `resume` nor `position`.
 
-The read token starts with `rtl_`, not `rtk_`. Passing a publication token to
-`createConsumer` throws before anything leaves the machine — the separation is
-in the token format, not in a capability flag, so there is no code path where
-one credential does the other one's job.
+A key without `log:read` is refused by the service with `credential_refused`
+and `reason: 'missing_operation'`. The client still accepts an older `rtl_`
+read token through `token`; passing an older publication token (`rtk_`) to
+`createConsumer` throws before anything leaves the machine.
 
 **Order is the part that looks easy.** The service hands facts over in log
 order, which is arrival order: a producer that sends 1, then 4, then 2 and 3
@@ -115,12 +121,16 @@ without a server.
 `pull` gives you one raw page if you want to handle the gaps yourself. A projection built from
 those pages is pure functions over facts, and never calls the system of record.
 
+Positions are per source, and nothing orders two sources against each other. 0.3.0 has no method
+for the service's batch read route (`POST /api/read/v1/batch`); a server calls it over HTTP.
+[docs/MANY-SOURCES.md](docs/MANY-SOURCES.md) covers both.
+
 ## Reading state from a browser
 
 `createStateReader` reads the current state of your entities, cut to exactly
-the sources the credential names. Two users of one party, with
-`["user-a", "party-1"]` and `["user-b", "party-1"]`, each see their own source
-and the party, never each other.
+the sources the credential names. Two users of one room, with
+`["user-a", "room-12"]` and `["user-b", "room-12"]`, each see their own source
+and the room, never each other's.
 
 ```ts
 import { createStateReader } from '@retick/client'
@@ -136,22 +146,14 @@ const unsubscribe = reader.subscribe((snapshot, freshness) => render(snapshot.st
 await reader.snapshot()
 ```
 
-What your backend does for `credentials()` (browser contract §3):
-
-1. Authenticates its own user. Retick never decides membership.
-2. Signs an ES256 JWT, at most 300 seconds long, with the issuer and audience
-   registered for the project, and
-   `retick: { project, capabilities: ["state:read"], sources: [...] }`.
-   `project` is the project's tenant key (`prj_…`, shown on the project's
-   overview in the Console), not the id in the Console's address. `aud` is the
-   audience registered with the issuer, exactly.
-   The scope is one of two, said explicitly. `sources` is the exact list for
-   this user, at most 32: missing or `[]` is refused, and one source outside the
-   issuer's ceiling refuses the whole request. `allSources: true`, instead of
-   `sources`, reads every source of the project, including sources created
-   later; only an issuer registered with all sources may grant it.
-3. `POST /api/browser/v1/session` with `{ "assertion": "<jwt>" }` and the page's
-   `Origin`, and returns `token` and `expiresAt` from the `201`.
+The page never holds an `rt_` key; `apiKey` is refused in a browser. Your
+backend signs an ES256 assertion that names the project by its **tenant key**
+(`prj_…`, not the id in the Console's address), uses the **audience registered**
+for your issuer, lives at most 300 seconds, and names either an exact list of
+at most 32 sources or `allSources: true`. It exchanges the assertion at
+`POST /api/browser/v1/session` and hands `{ token, expiresAt }` to the page.
+[docs/BROWSER.md](docs/BROWSER.md) has the registration, the assertion, the
+scope rules and every refusal.
 
 The reader keeps only the latest view in memory, sends the token in the
 `Authorization` header and never in a URL, and streams NDJSON over `fetch`.
@@ -159,43 +161,14 @@ Every line is the whole visible state. A `401`, or an `end` line, renews the
 credential once; a renewed credential that is refused again stops the reader.
 After a renewal the stream starts over instead of resuming, so a user whose
 sources changed never keeps seeing the old ones. A stream already open learns
-about a logout or a revoked key within about 5 seconds (the service's check
-interval); new requests are refused at once.
+about a logout or a revoked key within about 5 seconds; new requests are
+refused at once.
 
-`freshness()` gives `status`, `ageSeconds` (age of the view as last confirmed
-by the service, including heartbeats), `lastContactAt` and an English `reason`:
-`no_credential`, `network`, `forbidden`, `session_closed`, `rate_limited`,
-`service_unavailable`, `connection_lost`, `closed`, `expired` or `revoked`.
+`freshness()` gives `status`, `ageSeconds`, `lastContactAt` and an English
+`reason` (`StateReaderReason`).
 
-`close()` and `revoke()` work as described below for the Agora reader;
-`revoke()` sends one `DELETE /api/browser/v1/session`. With an `apiKey`
-(server only) nothing is revoked from here: keys are revoked in the Console.
-
-## Reading the Agora from a browser (Exo's bridge)
-
-New apps should use `createStateReader`. The Agora reader keeps serving Exo's Mesa.
-
-
-`createAgoraReader` is the third surface, and the only one meant for a tab. It
-reads the compact projection the service already materialized, with an `rtv_`
-credential the host supplies:
-
-```ts
-import { createAgoraReader } from '@retick/client'
-
-const reader = createAgoraReader({
-  url: 'https://retick.example',
-  // The reader never learns where this comes from, and never stores what it returns.
-  credentials: async () => mintFromMyOwnBackend(),
-})
-
-const unsubscribe = reader.subscribe((snapshot, freshness) => render(snapshot, freshness))
-await reader.snapshot()
-```
-
-It holds nothing on disk — no `localStorage`, no cookie — and never puts the
-token in a URL, which is why the live path is NDJSON over `fetch` and not
-`EventSource`.
+A server can read the same state with `apiKey` (an `rt_` key with `state:read`)
+instead of `credentials`.
 
 ### Leaving is two different acts
 
@@ -215,18 +188,23 @@ revokes end on their own `expiresAt`.
 |---|---|
 | `revoked` | `204`. The service ended it, and the end is persisted. |
 | `already-closed` | `401`. It already refuses this credential; the goal was met before you asked. |
-| `nothing-to-revoke` | there was no credential in memory, so nothing was sent |
+| `nothing-to-revoke` | there was no credential in memory, or the reader uses an `apiKey`, so nothing was sent |
 | `refused` | the service answered, but not with an end |
 | `unreachable` | network failure or timeout; the session will expire on its own clock |
 
-It sends at most one `DELETE` per reader, ever — repeat calls return the first
+It sends at most one `DELETE` per reader, ever: repeat calls return the first
 call's outcome without touching the network, and concurrent calls share one
-request. It never asks `credentials()` for anything: a teardown that could mint
-would be a teardown that opens a session in the middle of a logout. And
-`revokeTimeoutMs` (default `2000`) caps how long it may hold whoever is logging
-out, enforced both by the abort signal and by a race, so a `fetch` that ignores
-its signal cannot hang an exit.
+request. It never asks `credentials()` for anything, because a teardown that
+could mint would open a session in the middle of a logout. `revokeTimeoutMs`
+(default `2000`) caps how long it may hold whoever is logging out.
 
+## The Agora reader (legacy)
+
+`createAgoraReader` reads Exo's Portuguese Agora bridge (`/api/navegador/v1/*`)
+with an `rtv_` credential. In 0.3.0 it is deprecated at the root and also
+exported from `@retick/client/legacy`; it keeps serving Exo's Mesa. New apps use
+`createStateReader`. [docs/BROWSER.md](docs/BROWSER.md#6-from-createagorareader)
+maps one to the other. `close()` and `revoke()` behave as above.
 
 ## Two calls, because the contract has two routes
 
@@ -266,7 +244,7 @@ What does throw:
 | `RetickSourceClosedError` | `503` naming a closed source | no |
 | `RetickNetworkError` | never got an answer | yes |
 | `RetickTimeoutError` | no answer inside `timeoutMs` | yes |
-| `RetickConfigError` | no url, no token, url with the route suffix, publication token on the read surface | — |
+| `RetickConfigError` | no url, no key, url with the route suffix, a malformed `apiKey`, an `apiKey` in a browser, both `apiKey` and `token`, publication token on the read surface | — |
 
 All of them extend `RetickError`, which carries `retryable`.
 
@@ -287,15 +265,18 @@ the failure this protects against is a service coming back up, and producers tha
 same amount would return in one wave. `Retry-After` wins over the calculated delay when the
 service sends one.
 
-`429` is retried and v1 never emits it, because there is a size limit and no rate limit. It is handled
-because a proxy in front of the service can emit it, and meeting it unhandled costs a retry storm.
+The publish and read routes never emit `429`: there is a size limit and no rate limit. It is
+retried anyway because a proxy in front of the service can emit it, and meeting it unhandled costs
+a retry storm. The browser state routes do limit requests, and `createStateReader` waits at least
+`retry-after` there.
 
 ## Options
 
 | option | default | |
 |---|---|---|
 | `url` | — | base URL, without `/api/v1` |
-| `token` | — | `rtk_...`, held in memory only |
+| `apiKey` | — | the `rt_...` key issued in the Console, held in memory only. Refused in a browser |
+| `token` | — | an older `rtk_...` (producer) or `rtl_...` (consumer), for existing integrations. Pass `apiKey` or `token`, not both |
 | `timeoutMs` | `30000` | per request, covering the body |
 | `retries` | `3` | extra attempts after the first |
 | `retryBaseDelayMs` | `200` | first backoff ceiling, doubling per attempt |
@@ -322,24 +303,12 @@ It does not validate facts before sending. The service decides what it accepts, 
 is never a compatible change: a client that pre-rejected would keep rejecting after the service
 learned to accept.
 
-It does not write the token anywhere. It is held in a closure and sent in an `Authorization`
-header. Only the prefix `rtk_<12 hex>` appears in an error, which is what the service logs and
-what identifies a credential for revocation. A token that does not match the format is not echoed
-at all.
+It does not write the key anywhere. It is held in a closure and sent in an `Authorization`
+header. An `rt_` key never appears in an error. For an older `rtk_` token only the prefix
+`rtk_<12 hex>` does, which is what identifies it for revocation, and a token that does not match
+a known format is not echoed at all.
 
-## Two traps
-
-**Your `entityType` probably will not project.** v1 promises the fact is validated, deduplicated,
-ordered and counted in the cursor. It does not promise anyone understood the content. Only five
-`entityType`s have reducers (`dispatch`, `machine`, `session`, `block`, `approval`), and they
-read keys in English that came from the first producer. Use one of those five with your own
-vocabulary and you get `projected: true` with every field `null`, and nothing fails.
-
-Publish with an `entityType` of your own and accept `projected: false`. The fact is still ordered,
-deduplicated and in the cursor, which is what v1 promises.
-
-Whether it shows up on the Console is a second question, with a second list.
-[docs/FIRST-USE.md §5](docs/FIRST-USE.md#5-publish-your-first-fact) has both.
+## A trap
 
 **`payload` is declared optional and required in practice.** `GET /api/v1/contract` lists it as
 optional; the route rejects a fact that arrives without it. That is divergence 17, the fix is one
@@ -369,10 +338,10 @@ Semantic versioning.
 **While the version starts with `0.`, a minor bump may break you.** That is the semver rule and
 most people read past it, so: pin with `~0.3.0` if a break would cost you something.
 
-`1.0.0` is one specific promise. `createProducer`, `createConsumer` and `createAgoraReader` stop
+`1.0.0` is one specific promise. `createProducer`, `createConsumer` and `createStateReader` stop
 changing shape without a major. The publication surface has held still since the contract was
-frozen; the read and Agora surfaces are days old and nobody but their author has used them. Once
-somebody has, this goes to `1.0.0`.
+frozen; the read checkpoint and the state reader are new in 0.3.0. Once they have been used
+outside their author's own apps, this goes to `1.0.0`.
 
 `CHANGELOG.md` says what changed, and the release will not build without an entry for the
 version being published.
@@ -381,8 +350,8 @@ version being published.
 
 The full test suite. The tests that drive this client against a running Retick, `producer` and
 `consumer`, need the service on the other end, and the service is a separate, private
-repository. What lives here is the 53 tests that need nothing standing up: the Agora reader,
-batching, and the network layer with `fetch` injected.
+repository. What lives here is the 77 tests that need nothing standing up: the state and Agora
+readers, credential renewal, batching, and the network layer with `fetch` injected.
 
 The split costs something. A fork can change `src/producer.ts` and still see green.
 `scripts/provar-instalacao-avulsa.sh` is what covers the gap: it packs the tarball, installs it
