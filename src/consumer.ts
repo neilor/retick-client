@@ -30,7 +30,7 @@
  */
 
 import { resolveCredential, type CredentialOptions } from './credential.ts'
-import { RetickConfigError } from './errors.ts'
+import { RetickConfigError, RetickError, RetickHttpError, RetickRequestError } from './errors.ts'
 import { request, type HttpConfig } from './http.ts'
 import { checkCheckpoint, ResumableOrder, type FloorLowered, type ReplayCheckpoint } from './resume.ts'
 import type { Fact } from './types.ts'
@@ -48,6 +48,8 @@ export const READ_ROUTES = Object.freeze({
   base: '/api/read/v1',
   contract: '/api/read/v1/contract',
   facts: '/api/read/v1/facts',
+  /** Pages of many sources in one request; see `Consumer.replaySources`. */
+  batch: '/api/read/v1/batch',
 })
 
 /** A fact as the reader receives it. Never the envelope, never the raw payload. */
@@ -229,6 +231,66 @@ export type ReplayResult = {
   floorLowered: FloorLowered | null
 }
 
+export type ReplaySourcesOptions = {
+  /**
+   * The sources to replay, each named once. Your code chooses them: the ones a
+   * user or a room reads, or every source `contract().sources` lists. An empty
+   * list returns at once without a request.
+   */
+  sources: readonly string[]
+  /**
+   * Checkpoints from an earlier `replay()` or `replaySources()`, by source. A
+   * listed source without one starts from the beginning. Entries for sources
+   * not listed are ignored, and a checkpoint stored under another source's
+   * name is refused.
+   */
+  resume?: Readonly<Record<string, ReplayCheckpoint | undefined>>
+  /** Facts per source per request, as in `replay()`. The service caps it. */
+  limit?: number
+  /**
+   * Called once per batch of one source's facts that are ready to apply, in
+   * that source's `sourceVersion` order. Batches of different sources come in
+   * the order the service answered; that is not an order between sources.
+   * The first argument is what `replay()` passes, so the same handler works.
+   */
+  onFacts: (facts: ReadFact[], source: string) => void | Promise<void>
+  /**
+   * Stop after this many requests that read log not read before. Requests
+   * that only read again facts a previous call held do not count, and a call
+   * never stops while a source it asked for is still below its checkpoint's
+   * `readTo`.
+   */
+  maxRequests?: number
+}
+
+/** What `replaySources()` did for one source. */
+export type SourceReplay = {
+  applied: number
+  held: number
+  withheld: Withheld
+  /** From the last page of this source in this call; `null` if it was not read. */
+  state: SourceReadState | null
+  floorLowered: FloorLowered | null
+}
+
+export type ReplaySourcesResult = {
+  /**
+   * One checkpoint per listed source, the same `ReplayCheckpoint` that
+   * `replay()` returns. Persist each under its source and pass them back as
+   * `resume`, here or to `replay({ source, resume })`.
+   */
+  resume: Record<string, ReplayCheckpoint>
+  sources: Record<string, SourceReplay>
+  applied: number
+  held: number
+  /** Requests to `POST /api/read/v1/batch`, retries not counted. */
+  requests: number
+  /** Times the service left a source for a later request because the response was full. */
+  deferred: number
+  /** `true` when every listed source was read to the end of its log. `false` only after `maxRequests`. */
+  caughtUp: boolean
+}
+
 export type Consumer = {
   /** Your scope, the limits in force, and the cursor of each source you can see. */
   contract(): Promise<ReadContract>
@@ -241,9 +303,45 @@ export type Consumer = {
    * the same sequence of `onFacts` payloads, whatever the page size.
    */
   replay(options: ReplayOptions): Promise<ReplayResult>
+  /**
+   * `replay()` for many sources at once, over `POST /api/read/v1/batch`: one
+   * request carries a page of up to the service's `maxSources` sources (100
+   * today), instead of one request per source.
+   *
+   * Each source keeps its own order, held facts and checkpoint, exactly as in
+   * `replay()`; nothing orders one source against another. A refusal (a source
+   * outside the credential's list, for one) throws, and facts already passed
+   * to `onFacts` in that call are passed again by the next call, as when
+   * `replay()` throws.
+   */
+  replaySources(options: ReplaySourcesOptions): Promise<ReplaySourcesResult>
 }
 
 const DEFAULTS = { timeoutMs: 30_000, retries: 3, retryBaseDelayMs: 200, retryMaxDelayMs: 5_000 }
+
+/**
+ * Sources per batch request until the service states its own limit: the
+ * `maxSources` of `POST /api/read/v1/batch` today. A service mounted with a
+ * lower one refuses with that limit, and the client uses it from then on.
+ */
+const BATCH_MAX_SOURCES = 100
+
+/** `POST /api/read/v1/batch`. Each page is a single-source page. */
+type BatchReadWire = {
+  read: number
+  project: string
+  pages?: ReadPageWire[]
+  deferred?: { source: string; position: number }[]
+  limits?: { maxSources?: number }
+}
+
+/** The service's own limit, when it refused a batch for naming too many sources. */
+function tooManySources(e: unknown): number | null {
+  if (!(e instanceof RetickRequestError)) return null
+  const b = e.body as { code?: unknown; field?: unknown; reason?: unknown; max?: unknown } | null
+  if (b?.code !== 'invalid_field' || b.field !== 'sources' || b.reason !== 'too_many') return null
+  return typeof b.max === 'number' && Number.isSafeInteger(b.max) && b.max >= 1 ? b.max : null
+}
 
 /**
  * Restores `sourceVersion` order over facts that arrive in log order.
@@ -346,7 +444,10 @@ export function createConsumer(options: ConsumerOptions): Consumer {
       'GET',
       `${READ_ROUTES.facts}?${q.toString()}`,
     )
+    return toPage(body)
+  }
 
+  function toPage(body: ReadPageWire): Page {
     return {
       project: body.project,
       source: body.source,
@@ -462,6 +563,197 @@ export function createConsumer(options: ConsumerOptions): Consumer {
         withheld,
         state,
         floorLowered: order.floorLowered,
+      }
+    },
+    async replaySources(op: ReplaySourcesOptions): Promise<ReplaySourcesResult> {
+      const names = [...op.sources]
+      const listed = new Set<string>()
+      for (const source of names) {
+        if (typeof source !== 'string' || source === '') {
+          throw new RetickConfigError('replaySources(): every source must be a non-empty string')
+        }
+        if (listed.has(source)) {
+          throw new RetickConfigError(`replaySources(): source ${JSON.stringify(source)} is listed twice`)
+        }
+        listed.add(source)
+      }
+      if (op.maxRequests !== undefined && !(Number.isSafeInteger(op.maxRequests) && op.maxRequests >= 1)) {
+        throw new RetickConfigError('replaySources(): maxRequests must be a positive integer')
+      }
+
+      type Progress = {
+        source: string
+        from: ReplayCheckpoint | null
+        order: ResumableOrder
+        position: number
+        /** `readTo` of the checkpoint this call started from. */
+        readTo: number
+        asked: boolean
+        done: boolean
+        applied: number
+        withheld: Withheld
+        state: SourceReadState | null
+      }
+      const progress = new Map<string, Progress>()
+      for (const source of names) {
+        const given = op.resume?.[source]
+        const from = given !== undefined ? checkCheckpoint(given, source) : null
+        progress.set(source, {
+          source,
+          from,
+          order: new ResumableOrder(source, from),
+          position: from ? from.position : 0,
+          readTo: from?.readTo ?? 0,
+          asked: false,
+          done: false,
+          applied: 0,
+          withheld: { type: 0, sensitivity: 0 },
+          state: null,
+        })
+      }
+
+      let applied = 0
+      const deliver = async (p: Progress, ready: ReadFact[]) => {
+        if (ready.length === 0) return
+        p.applied += ready.length
+        applied += ready.length
+        await op.onFacts(ready, p.source)
+      }
+
+      let perRequest = BATCH_MAX_SOURCES
+      let requests = 0
+      let newRequests = 0
+      let deferredCount = 0
+      // Sources the service deferred go first in the next request. It fills
+      // its byte budget in request order, so this is what keeps a source
+      // behind a large one from waiting until that one is done.
+      let front: string[] = []
+
+      for (;;) {
+        const open = names.filter((s) => !(progress.get(s) as Progress).done)
+        if (open.length === 0) break
+        if (
+          op.maxRequests !== undefined &&
+          newRequests >= op.maxRequests &&
+          open.every((s) => {
+            const p = progress.get(s) as Progress
+            return !p.asked || p.position >= p.readTo
+          })
+        ) {
+          break
+        }
+
+        const first = front.filter((s) => !(progress.get(s) as Progress).done)
+        const firstSet = new Set(first)
+        const batch = [...first, ...open.filter((s) => !firstSet.has(s))].slice(0, perRequest)
+        const payload = JSON.stringify({
+          sources: batch.map((source) => ({ source, position: (progress.get(source) as Progress).position })),
+          ...(op.limit !== undefined ? { limit: op.limit } : {}),
+        })
+
+        requests += 1
+        let body: BatchReadWire
+        try {
+          body = (await request<BatchReadWire>(cfg, 'POST', READ_ROUTES.batch, payload)).body
+        } catch (e) {
+          const max = tooManySources(e)
+          if (max !== null && max < batch.length) {
+            // A service mounted with a lower limit says so in the refusal.
+            perRequest = max
+            continue
+          }
+          if (e instanceof RetickHttpError && e.status === 404) {
+            throw new RetickHttpError(
+              `${READ_ROUTES.batch} is not on this service; replay each source with replay()`,
+              { status: e.status, url: e.url, body: e.body, tokenPrefix: e.tokenPrefix },
+            )
+          }
+          throw e
+        }
+        const maxSources = body.limits?.maxSources
+        if (typeof maxSources === 'number' && Number.isSafeInteger(maxSources) && maxSources >= 1) {
+          perRequest = Math.min(perRequest, maxSources)
+        }
+
+        const waiting = new Set(batch)
+        let readNew = false
+        let moved = false
+        for (const wire of body.pages ?? []) {
+          const page = toPage(wire)
+          const p = waiting.has(page.source) ? progress.get(page.source) : undefined
+          if (!p || page.cursor.from !== p.position) {
+            throw new RetickError(
+              `the batch read answered source ${JSON.stringify(page.source)} at position ${page.cursor.from}, ` +
+                'which this request did not ask for',
+            )
+          }
+          waiting.delete(page.source)
+          if (!p.asked && p.from !== null && page.cursor.total < p.from.readTo) {
+            throw new RetickConfigError(
+              `resume was read up to position ${p.from.readTo}, past the end of source ${p.source}'s log ` +
+                `(${page.cursor.total} facts); replay it from the beginning without resume`,
+            )
+          }
+          p.asked = true
+          if (page.cursor.next > p.readTo) readNew = true
+          if (page.cursor.next > page.cursor.from || !page.cursor.hasMore) moved = true
+          p.position = page.cursor.next
+          p.state = page.state
+          p.withheld.type += page.withheld.type
+          p.withheld.sensitivity += page.withheld.sensitivity
+
+          p.order.observeFloor(page.state?.floor)
+          await deliver(p, p.order.offer(page.facts))
+          if (!page.cursor.hasMore) {
+            await deliver(p, p.order.settleUnseen(page.state?.contiguous))
+            p.done = true
+          }
+        }
+        const deferred = body.deferred ?? []
+        for (const d of deferred) {
+          if (!waiting.delete(d.source)) {
+            throw new RetickError(`the batch read deferred source ${JSON.stringify(d.source)}, which this request did not ask for`)
+          }
+          ;(progress.get(d.source) as Progress).asked = true
+        }
+        if (!moved) {
+          // The service always carries at least one fact when one is due, so
+          // this is a service or a proxy answering something else. Looping
+          // would ask the same thing forever.
+          throw new RetickError('the batch read advanced no source; stopping instead of asking again')
+        }
+        if (readNew) newRequests += 1
+        deferredCount += deferred.length
+        front = deferred.map((d) => d.source)
+      }
+
+      const resume: Record<string, ReplayCheckpoint> = {}
+      const sources: Record<string, SourceReplay> = {}
+      let held = 0
+      for (const p of progress.values()) {
+        if (p.asked) {
+          const cp = p.order.checkpoint(p.position)
+          resume[p.source] = { ...cp, readTo: Math.max(cp.readTo, p.readTo) }
+        } else {
+          resume[p.source] = p.from ?? { source: p.source, position: 0, readTo: 0, floor: null, settled: [] }
+        }
+        held += p.order.held
+        sources[p.source] = {
+          applied: p.applied,
+          held: p.order.held,
+          withheld: p.withheld,
+          state: p.state,
+          floorLowered: p.order.floorLowered,
+        }
+      }
+      return {
+        resume,
+        sources,
+        applied,
+        held,
+        requests,
+        deferred: deferredCount,
+        caughtUp: names.every((s) => (progress.get(s) as Progress).done),
       }
     },
   }

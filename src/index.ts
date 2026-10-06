@@ -80,7 +80,10 @@ export type {
   ReadRange,
   ReplayOptions,
   ReplayResult,
+  ReplaySourcesOptions,
+  ReplaySourcesResult,
   SourceReadState,
+  SourceReplay,
   Withheld,
 } from './consumer.ts'
 export type { FloorLowered, ReplayCheckpoint } from './resume.ts'
