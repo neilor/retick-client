@@ -11,14 +11,14 @@ Apache-2.0.
 
 ## Start here
 
-The guides describe 0.3.0, the current version on npm.
+The guides describe 0.4.0.
 
 | guide | for |
 |---|---|
 | [docs/QUICKSTART.md](docs/QUICKSTART.md) | from nothing to a fact visible in the Console, in five steps |
 | [docs/FIRST-USE.md](docs/FIRST-USE.md) | the same journey with the reasons: tenant key, sources, the `rt_` key, publishing, reading back |
 | [docs/PRODUCERS.md](docs/PRODUCERS.md) | `sourceVersion`, lost answers and timeouts, serverless functions and several instances |
-| [docs/MANY-SOURCES.md](docs/MANY-SOURCES.md) | reading many sources, order across them, the service's batch read route |
+| [docs/MANY-SOURCES.md](docs/MANY-SOURCES.md) | reading many sources: `replaySources`, order across them, the batch read route |
 | [docs/BROWSER.md](docs/BROWSER.md) | `createStateReader`: registering your backend, choosing each user's sources, the page |
 | [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | what to do when something refuses you |
 
@@ -121,9 +121,25 @@ without a server.
 `pull` gives you one raw page if you want to handle the gaps yourself. A projection built from
 those pages is pure functions over facts, and never calls the system of record.
 
-Positions are per source, and nothing orders two sources against each other. 0.3.0 has no method
-for the service's batch read route (`POST /api/read/v1/batch`); a server calls it over HTTP.
-[docs/MANY-SOURCES.md](docs/MANY-SOURCES.md) covers both.
+Positions are per source, and nothing orders two sources against each other.
+
+`replaySources` is `replay` for many sources, over the service's batch read route
+(`POST /api/read/v1/batch`): one request reads up to 100 sources instead of one request per source.
+
+```ts
+const r = await consumer.replaySources({
+  sources: ['room-01', 'room-02', 'user-a'],
+  resume: savedBySource,                          // Record<string, ReplayCheckpoint>
+  onFacts: (facts, source) => { for (const f of facts) apply(source, f) },
+})
+savedBySource = r.resume                          // one checkpoint per source
+```
+
+Each source keeps its own order, held facts and checkpoint, the same `ReplayCheckpoint` that
+`replay` takes and returns, so the two can be mixed. It returns `{ resume, sources, applied, held,
+requests, deferred, caughtUp }`. `maxRequests` stops a call early with every checkpoint resumable.
+A service without the batch route answers `404`, and the client does not fall back to `replay` on
+its own. [docs/MANY-SOURCES.md](docs/MANY-SOURCES.md) covers both methods and the route.
 
 ## Reading state from a browser
 
@@ -336,11 +352,11 @@ anyway: `@retick/cli` and whatever comes after it arrive without a second round 
 Semantic versioning.
 
 **While the version starts with `0.`, a minor bump may break you.** That is the semver rule and
-most people read past it, so: pin with `~0.3.0` if a break would cost you something.
+most people read past it, so: pin with `~0.4.0` if a break would cost you something.
 
 `1.0.0` is one specific promise. `createProducer`, `createConsumer` and `createStateReader` stop
 changing shape without a major. The publication surface has held still since the contract was
-frozen; the read checkpoint and the state reader are new in 0.3.0. Once they have been used
+frozen; the read checkpoint and the state reader are new in 0.3.0, and `replaySources` in 0.4.0. Once they have been used
 outside their author's own apps, this goes to `1.0.0`.
 
 `CHANGELOG.md` says what changed, and the release will not build without an entry for the
@@ -350,8 +366,9 @@ version being published.
 
 The full test suite. The tests that drive this client against a running Retick, `producer` and
 `consumer`, need the service on the other end, and the service is a separate, private
-repository. What lives here is the 77 tests that need nothing standing up: the state and Agora
-readers, credential renewal, batching, and the network layer with `fetch` injected.
+repository. What lives here is the 100 tests that need nothing standing up: the state and Agora
+readers, credential renewal, batching, `replaySources` against an injected service, and the network
+layer with `fetch` injected.
 
 The split costs something. A fork can change `src/producer.ts` and still see green.
 `scripts/provar-instalacao-avulsa.sh` is what covers the gap: it packs the tarball, installs it

@@ -6,6 +6,20 @@ versionamento segue [SemVer](https://semver.org/lang/pt-BR/).
 Enquanto a versao comecar com `0.`, **um bump de minor pode quebrar**. A regra
 de `1.0.0` esta no README, em "Versioning".
 
+## 0.4.0
+
+### Added
+
+- `consumer.replaySources({ sources, resume, onFacts })`: `replay()` for many
+  sources over `POST /api/read/v1/batch`, one request for up to 100 sources
+  instead of one per source. Each source keeps its own order, held facts and
+  `ReplayCheckpoint`, the same one `replay()` returns and accepts, so the two
+  can be mixed. `onFacts(facts, source)` is called per source; nothing orders
+  one source against another. Sources the service defers go first in the next
+  request, and `maxRequests` stops a call early with every checkpoint
+  resumable. New types: `ReplaySourcesOptions`, `ReplaySourcesResult`,
+  `SourceReplay`. `READ_ROUTES.batch` names the route.
+
 ## 0.3.0
 
 ### Added

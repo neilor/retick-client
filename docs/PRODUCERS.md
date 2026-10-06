@@ -7,7 +7,7 @@ what to do when an answer is lost, and how to allocate versions when the
 producer runs as several instances at once (serverless functions, workers, a
 deploy that overlaps old and new).
 
-Everything here applies to `@retick/client` 0.3.0 and to plain HTTP calls to
+Everything here applies to `@retick/client` 0.4.0 and to plain HTTP calls to
 `POST /api/v1/facts`.
 
 ## What each answer means

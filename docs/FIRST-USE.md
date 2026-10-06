@@ -5,7 +5,7 @@ the reasons attached: the project and its tenant key, sources, the API key,
 publishing, and reading your facts back. Browsers, serverless producers and
 apps with many sources have their own pages, linked where they come up.
 
-Everything here describes `@retick/client` 0.3.0 and the service it talks to.
+Everything here describes `@retick/client` 0.4.0 and the service it talks to.
 What the service does not do is listed in §10.
 
 ## 0. What you need
@@ -255,8 +255,8 @@ Your side:
 
 - The service never numbers facts. `sourceVersion` is always yours.
 - No order or position across sources. Positions are per source.
-- No batch method in 0.3.0. The service answers `POST /api/read/v1/batch`,
-  which a server calls over HTTP ([MANY-SOURCES.md](MANY-SOURCES.md)).
+- No order across sources in `replaySources` either: it reads many sources per
+  request, and each keeps its own order ([MANY-SOURCES.md](MANY-SOURCES.md)).
 - No archiving or deletion of sources.
 - No rate limit on publishing or reading. There is a size limit
   (`contract().limits`). The browser state routes do limit requests and answer

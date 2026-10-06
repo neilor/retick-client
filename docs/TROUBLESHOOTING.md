@@ -1,7 +1,7 @@
 # Troubleshooting
 
 Grouped by what you were doing when it happened. The codes are the ones
-`@retick/client` 0.3.0 and the service's English routes produce.
+`@retick/client` 0.4.0 and the service's English routes produce.
 
 Two habits worth having first:
 
@@ -131,6 +131,18 @@ a `sourceVersion` was skipped, or a fact was refused and never resent.
 
 Resume from `result.resume`, not from `result.position` and not from a
 `sourceVersion`. [MANY-SOURCES.md](MANY-SOURCES.md#one-source-replay-with-resume).
+
+### `replaySources` threw `RetickHttpError` with `404`
+
+The service you are talking to has no `POST /api/read/v1/batch`. Read each
+source with `replay`; the checkpoints are the same, so nothing is lost when you
+switch back later.
+
+### `replaySources` threw a refusal and some facts came twice
+
+A refusal (a source outside the key's list, for one) stops the whole call.
+Facts already passed to `onFacts` in that call are passed again by the next one,
+as with `replay`. Key every apply by `(source, sourceVersion)`.
 
 ## The Console
 
