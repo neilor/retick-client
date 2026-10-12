@@ -256,7 +256,7 @@ What does throw:
 |---|---|---|
 | `RetickAuthError` | `401`, `403` | no |
 | `RetickRequestError` | `400`, `405`, `413` | no |
-| `RetickServerError` | `5xx`, `429` | yes |
+| `RetickServerError` | `5xx`, `429` (including `publish_quota`, `stream_limit` and `project_suspended`) | yes |
 | `RetickSourceClosedError` | `503` naming a closed source | no |
 | `RetickNetworkError` | never got an answer | yes |
 | `RetickTimeoutError` | no answer inside `timeoutMs` | yes |
@@ -281,10 +281,17 @@ the failure this protects against is a service coming back up, and producers tha
 same amount would return in one wave. `Retry-After` wins over the calculated delay when the
 service sends one.
 
-The publish and read routes never emit `429`: there is a size limit and no rate limit. It is
-retried anyway because a proxy in front of the service can emit it, and meeting it unhandled costs
-a retry storm. The browser state routes do limit requests, and `createStateReader` waits at least
-`retry-after` there.
+`429` and a `503` without a `fonte` field are project controls, and the client retries both. Since
+2026-10-11 the service can cap a project's publishes per minute (`code: publish_quota`, `429`) or
+open streams (`code: stream_limit`, `429`), or suspend the project (`code: project_suspended`,
+`503`). Nothing of the batch is written, the body carries `retryAfterSeconds` and the response
+carries `Retry-After`, so resending the same batch after that wait is safe. A project with no
+control set never sees them. A proxy in front of the service can also emit `429`.
+
+The browser state routes also limit requests per credential and per project, and
+`createStateReader` waits at least `retry-after` there. A suspension applies to reads too: a read
+answers `503 project_suspended`, and an open state stream ends without a renewal hint, so the
+reader backs off instead of renewing its credential.
 
 ## Options
 
